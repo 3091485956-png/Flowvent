@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>秒策 · 企业活动策划工作台</title>
+<link rel="stylesheet" href="assets/styles.css">
+</head>
+<body data-view="home">
+
+<!-- ═══════════ 全页 Aurora 背景(fixed,铺满网页) ═══════════ -->
+<div class="aurora-bg" id="aurora-bg"></div>
+
+<main id="app">
+
+  <!-- ═══════════ 视图一:首页(无导航栏,Aurora 背景) ═══════════ -->
+  <section id="view-home" class="view">
+    <div class="container home-wrap">
+      <div class="home-hero">
+        <h1>你好,今天要策划什么活动?</h1>
+        <button class="btn btn-primary btn-xl" id="btn-new-plan"><i data-icon="plus"></i>新建活动策划</button>
+      </div>
+      <p class="home-foot">AI 一键成案 · Word 式编辑 · 数据只存本机</p>
+    </div>
+  </section>
+
+
+  <!-- ═══════════ 视图二:应用主框架(左抽屉导航 + 右内容区) ═══════════ -->
+  <section id="view-app" class="view">
+
+    <aside class="drawer">
+      <button class="brand" id="brand-home" title="返回首页">
+        <span class="brand-mark">策</span>
+        <span class="brand-name">秒策</span>
+      </button>
+      <nav class="drawer-nav">
+        <button data-panel="activities"><i data-icon="folder-open"></i>我的活动</button>
+        <button data-panel="create"><i data-icon="plus"></i>创建活动</button>
+        <button data-panel="memory"><i data-icon="sparkles"></i>记忆库</button>
+        <button data-panel="settings"><i data-icon="settings"></i>设置</button>
+      </nav>
+      <p class="drawer-foot">数据只存本机</p>
+    </aside>
+
+    <div class="app-main">
+
+      <!-- 面板:我的活动 -->
+      <div class="panel" id="panel-activities">
+        <h2 class="page-title">我的活动 <span class="section-count" id="act-count"></span></h2>
+        <div class="history-toolbar">
+          <input type="search" id="history-search" class="input" placeholder="搜索方案名称…">
+          <div class="cat-chips" id="history-chips"></div>
+        </div>
+        <div id="history-list"></div>
+        <details id="archived-box" class="archived-box">
+          <summary>已归档方案(<span id="archived-count">0</span>)</summary>
+          <div id="archived-list" class="history-list"></div>
+        </details>
+      </div>
+
+      <!-- 面板:创建活动 -->
+      <div class="panel" id="panel-create">
+        <h2 class="page-title">创建活动</h2>
+        <div id="create-form">
+        <div class="gen-error" id="gen-error" hidden></div>
+        <div class="form-sec">
+          <h3>基本信息</h3>
+          <div class="form-grid">
+            <label class="field"><span class="field-label">组织 / 公司名称 <b>*</b></span>
+              <input class="input" id="f-company" placeholder="如:星海科技有限公司"></label>
+            <label class="field"><span class="field-label">活动名称 <b>*</b></span>
+              <input class="input" id="f-name" placeholder="如:2026 秋季全员团建"></label>
+            <label class="field"><span class="field-label">活动类型 <b>*</b></span>
+              <select class="input select" id="f-type"></select></label>
+            <label class="field" data-cond="festival" hidden><span class="field-label">具体节日 <b>*</b></span>
+              <select class="input select" id="f-festival">
+                <option value="">请选择节日</option>
+                <option value="元旦">元旦</option><option value="新年">新年(春节)</option>
+                <option value="元宵">元宵</option><option value="三八">三八妇女节</option>
+                <option value="五一">五一</option><option value="五四">五四青年节</option>
+                <option value="六一">六一</option><option value="端午">端午</option>
+                <option value="七夕">七夕</option><option value="中秋">中秋</option>
+                <option value="国庆">国庆</option><option value="圣诞">圣诞</option>
+                <option value="冬至">冬至</option><option value="其他">其他</option>
+              </select></label>
+            <label class="field" data-cond="product" hidden><span class="field-label">产品名称 <b>*</b></span>
+              <input class="input" id="f-product" placeholder="如:星舰 Pro 智能办公本"></label>
+            <label class="field field-wide"><span class="field-label">活动目的 / 背景</span>
+              <textarea class="input" id="f-purpose" rows="3" placeholder="一句话说明为什么办这场活动,写得越具体,AI 生成越贴合"></textarea></label>
+          </div>
+        </div>
+
+        <div class="form-sec">
+          <h3>时间安排</h3>
+          <div class="form-grid">
+            <label class="field"><span class="field-label">活动日期 <b>*</b></span>
+              <input type="date" class="input" id="f-date"></label>
+            <label class="field"><span class="field-label">开始时间 <b>*</b></span>
+              <input type="time" class="input" id="f-start" value="09:00"></label>
+            <label class="field"><span class="field-label">活动时长 <b>*</b></span>
+              <select class="input select" id="f-duration">
+                <option value="half">半天(约 4 小时)</option>
+                <option value="day" selected>一天</option>
+                <option value="dayhalf">一天半</option>
+                <option value="two">两天一夜</option>
+              </select></label>
+          </div>
+        </div>
+
+        <div class="form-sec">
+          <h3>地点与人群</h3>
+          <div class="form-grid">
+            <label class="field"><span class="field-label">地点类型 <b>*</b></span>
+              <select class="input select" id="f-venueType">
+                <option value="office">公司内</option>
+                <option value="indoor">室内场地(外部)</option>
+                <option value="outdoor">户外</option>
+                <option value="online">线上线下结合</option>
+              </select></label>
+            <label class="field"><span class="field-label">具体地点</span>
+              <input class="input" id="f-venue" placeholder="选填,如:临湖山庄拓展基地"></label>
+            <label class="field"><span class="field-label">参与人数 <b>*</b></span>
+              <input type="number" class="input" id="f-headcount" min="1" max="10000" placeholder="如:60"></label>
+            <label class="field"><span class="field-label">面向人群 <b>*</b></span>
+              <select class="input select" id="f-audience">
+                <option value="staff">员工</option>
+                <option value="client">客户</option>
+                <option value="partner">合作伙伴</option>
+                <option value="mixed">混合(员工+外部)</option>
+              </select></label>
+          </div>
+        </div>
+
+        <div class="form-sec">
+          <h3>预算与需求</h3>
+          <div class="form-grid">
+            <label class="field"><span class="field-label">预算总额(元)</span>
+              <input type="number" class="input" id="f-budget" min="0" placeholder="选填,如:20000"></label>
+            <label class="field field-wide"><span class="field-label">特殊需求</span>
+              <textarea class="input" id="f-notes" rows="2" placeholder="选填,如:需安排接送、有 3 位素食同事、领导致辞 10 分钟"></textarea></label>
+          </div>
+        </div>
+
+        <div class="wizard-footer">
+          <span class="wizard-hint">方案由 AI 一次性生成整份文档;未填写的可选项将以「待定」呈现,不会编造。</span>
+          <label class="effort-pick" title="思考强度由所配置的模型决定,不支持时自动忽略">思考强度
+            <select class="input select" id="f-effort">
+              <option value="high" selected>深度</option>
+              <option value="medium">均衡</option>
+              <option value="low">快速</option>
+            </select></label>
+          <button class="btn btn-primary" id="btn-w-next"><i data-icon="sparkles"></i>AI 生成方案</button>
+        </div>
+        </div><!-- /create-form -->
+
+        <div class="wizard-gen" id="create-gen" hidden>
+          <div class="gen-head">
+            <h3 id="gen-title">AI 正在撰写完整方案…</h3>
+            <p id="gen-sub">根据活动信息一次性生成整份策划案</p>
+          </div>
+          <ul class="gen-list" id="gen-list"><!-- JS 注入 --></ul>
+          <div class="gen-think" id="gen-think" hidden>
+            <div class="gen-think-head"><span class="gen-think-dot"></span><span id="gen-think-title">AI 深度思考中</span></div>
+            <pre class="gen-think-body" id="gen-think-body"></pre>
+          </div>
+          <p class="gen-progress" id="gen-progress"></p>
+        </div>
+      </div><!-- /panel-create -->
+
+      <!-- 面板:记忆库(docs/13/15) -->
+      <div class="panel" id="panel-memory">
+        <h2 class="page-title">记忆库 <span class="section-count">四大模块 · 记忆图谱</span></h2>
+        <div class="cat-chips" id="mem-cats"></div>
+        <div class="history-toolbar">
+          <select class="input select" id="mem-store"></select>
+          <button class="btn btn-ghost btn-sm" id="mem-new"><i data-icon="plus"></i>新建笔记库</button>
+          <button class="btn btn-ghost btn-sm" id="mem-import"><i data-icon="download"></i>导入 MD</button>
+          <button class="btn btn-ghost btn-sm" id="mem-import-dir"><i data-icon="folder-open"></i>文件夹</button>
+          <button class="btn btn-ghost btn-sm" id="mem-intake"><i data-icon="wand-sparkles"></i>导入过往方案</button>
+          <button class="btn btn-ghost btn-sm" id="mem-induce">归纳偏好</button>
+          <button class="btn btn-ghost btn-sm" id="mem-layout">布局:力导向</button>
+          <button class="btn btn-ghost btn-sm" id="mem-export">导出</button>
+          <button class="btn btn-danger-ghost btn-sm" id="mem-del-store">删库</button>
+          <input type="search" class="input" id="mem-search" placeholder="搜索节点…">
+        </div>
+        <div class="memory-toolbar-side">
+          <span class="ai-status" id="mem-profile-status"></span>
+          <button class="btn btn-ghost btn-sm" id="mem-profile-clear">清除档案</button>
+        </div>
+        <div class="memory-body">
+          <div id="mem-cy"></div>
+          <input type="file" id="mem-file-input" multiple accept=".md,.markdown,.txt" hidden>
+          <input type="file" id="mem-dir-input" webkitdirectory hidden>
+          <input type="file" id="mem-intake-input" multiple accept=".docx,.pdf,.md,.txt" hidden>
+          <div class="mem-detail" id="mem-detail" hidden></div>
+        </div>
+        <p class="modal-note">· 导入仅在本机解析所选文件,零上传;再次导入同一文件夹时,未变更文件自动跳过<br>· 浏览器安全限制:节点不能直接打开本地文件,可在详情中复制路径<br>· 绿色节点是 AI 正在使用的企业偏好,点击可删除;图谱渲染库首次打开时联网加载,离线时自动切换列表视图</p>
+      </div>
+
+      <!-- 面板:设置 -->
+      <div class="panel" id="panel-settings">
+        <h2 class="page-title">设置</h2>
+        <div class="settings-card">
+          <h3>AI 接口(生成方案必配)</h3>
+          <label class="field"><span class="field-label">接口地址(OpenAI 兼容 baseURL)</span>
+            <input class="input" id="ai-url" placeholder="如:https://open.bigmodel.cn/api/paas/v4"></label>
+          <label class="field"><span class="field-label">API Key</span>
+            <input class="input" type="password" id="ai-key" placeholder="sk-…"></label>
+          <label class="field"><span class="field-label">模型名</span>
+            <input class="input" id="ai-model" placeholder="如:glm-4-flash / gpt-4o-mini"></label>
+          <div class="settings-row">
+            <button class="btn btn-ghost btn-sm" id="ai-test">测试连接</button>
+            <div class="ai-status" id="ai-status"></div>
+          </div>
+          <div class="settings-row">
+            <button class="btn btn-ghost btn-sm" id="ai-clear">清除配置</button>
+            <button class="btn btn-primary btn-sm" id="ai-save">保存</button>
+          </div>
+          <p class="modal-note">· 方案由 AI 一次性生成整份文档:<b>生成 / 重新生成 / 润色 / 扩写</b>均需配置 AI;已有方案的查看、编辑与导出不依赖网络。<br>· Key 仅保存在本机浏览器(localStorage),随用随删,不上传任何服务器;支持智谱、通义、OpenAI、Ollama 等兼容接口。</p>
+        </div>
+      </div>
+
+      <!-- 面板:编辑器(完整文档查看态;编辑在新标签页) -->
+      <div class="panel" id="panel-editor">
+        <div class="editor-bar">
+          <input class="input plan-name-input" id="editor-name" title="点击修改方案名称">
+          <span class="save-indicator" id="save-indicator">已自动保存</span>
+          <button class="btn btn-ghost" id="btn-edit-meta" title="修改日期/地点/人数等基本信息(同步导出文档)"><i data-icon="calendar"></i>活动信息</button>
+          <button class="btn btn-primary" id="btn-edit-doc"><i data-icon="pencil"></i>编辑文档</button>
+          <button class="btn btn-ghost" id="btn-word"><i data-icon="download"></i>导出 Word</button>
+          <button class="btn btn-ghost" id="btn-pdf"><i data-icon="download"></i>导出 PDF</button>
+          <button class="btn btn-ghost" id="btn-export"><i data-icon="download"></i>导出 Markdown</button>
+        </div>
+        <div class="container-editor">
+          <aside class="editor-side">
+            <div class="plan-meta" id="plan-meta"></div>
+            <nav class="module-nav" id="module-nav"></nav>
+          </aside>
+          <div class="editor-main">
+            <div id="doc-view" class="doc-view"></div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+  <!-- ═══════════ 视图三:文档编辑页(独立标签页,#edit=<planId>) ═══════════ -->
+  <section id="view-edit" class="view">
+    <header class="editbar">
+      <button class="brand" id="edit-home" title="返回主界面">
+        <span class="brand-mark">策</span><span class="brand-name">秒策</span>
+      </button>
+      <input class="input plan-name-input" id="edit-name" title="点击修改方案名称">
+      <div class="edit-tools">
+        <button class="tool" data-cmd="bold" title="加粗"><b>B</b></button>
+        <button class="tool" data-cmd="h4" title="小节标题">H</button>
+        <button class="tool" data-cmd="p" title="正文">¶</button>
+        <button class="tool" data-cmd="ul" title="无序列表">•—</button>
+        <button class="tool" data-cmd="ol" title="有序列表">1.</button>
+        <span class="tool-sep"></span>
+        <button class="tool" data-cmd="undo" title="撤销">↩</button>
+        <button class="tool" data-cmd="redo" title="重做">↪</button>
+      </div>
+      <div class="edit-ai">
+        <span class="ai-target" id="ai-target">当前模块:—</span>
+        <button class="btn btn-sm btn-primary" id="btn-ai-chat"><i data-icon="wand-sparkles"></i>AI 编辑</button>
+      </div>
+      <span class="save-indicator" id="edit-save">已自动保存</span>
+      <button class="btn btn-sm btn-ghost" id="btn-edit-word"><i data-icon="download"></i>导出 Word</button>
+      <button class="btn btn-sm btn-ghost" id="btn-edit-pdf"><i data-icon="download"></i>导出 PDF</button>
+    </header>
+    <div class="edit-body">
+      <aside class="edit-side" id="edit-side"></aside>
+      <div class="edit-doc-wrap">
+        <div class="doc-page">
+          <div id="edit-doc" contenteditable="true" spellcheck="false"></div>
+        </div>
+      </div>
+      <aside class="edit-chat" id="edit-chat" hidden>
+        <div class="chat-head">
+          <b>AI 编辑</b>
+          <span class="chat-target" id="chat-target"></span>
+          <button class="chat-close" id="chat-close" title="收起">✕</button>
+        </div>
+        <div class="chat-msgs" id="chat-msgs"></div>
+        <div class="chat-quick">
+          <button data-quick="regen">重写当前章节</button>
+          <button data-quick="polish">润色当前章节</button>
+          <button data-quick="expand">扩写当前章节</button>
+        </div>
+        <div class="chat-input-row">
+          <textarea id="chat-input" rows="2" placeholder="告诉 AI 怎么改,如:流程整体提前半小时,致辞压到 10 分钟内"></textarea>
+          <button class="btn btn-primary btn-sm" id="chat-send">发送</button>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+</main>
+
+<!-- ═══════════ 打印根(打印时唯一可见) ═══════════ -->
+<div id="print-root" hidden></div>
+
+<!-- ═══════════ 通用弹窗 ═══════════ -->
+<div id="modal" class="modal" hidden>
+  <div class="modal-card">
+    <h3 id="modal-title"></h3>
+    <div id="modal-body"></div>
+    <div class="modal-foot" id="modal-foot"></div>
+  </div>
+</div>
+
+<div id="toasts" class="toasts"></div>
+
+<script src="assets/js/bg.js"></script>
+<script src="assets/js/icons.js"></script>
+<script src="assets/js/md.js"></script>
+<script src="assets/js/struct.js"></script>
+<script src="assets/js/profile.js"></script>
+<script src="assets/js/ai.js"></script>
+<script src="assets/js/storage.js"></script>
+<script src="assets/js/memory.js"></script>
+<script src="assets/js/intake.js"></script>
+<script src="assets/js/memoryview.js"></script>
+<script src="assets/js/exporter.js"></script>
+<script src="assets/js/word.js"></script>
+<script src="assets/js/pdf.js"></script>
+<script src="assets/js/doceditor.js"></script>
+<script src="assets/js/app.js"></script>
+</body>
+</html>

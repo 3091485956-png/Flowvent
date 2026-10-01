@@ -1,0 +1,6 @@
+# 临时/过程文件
+.tmp-icons/
+.tmp-sp.json
+*.log
+.DS_Store
+Thumbs.db
