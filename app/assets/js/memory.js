@@ -198,14 +198,11 @@ EP.memory = (function () {
     const p = P.load();
     const now = Date.now();
     const nodes = {}, edges = [];
-    const center = 'Profile:记忆库';
-    nodes[center] = { id: center, label: '记忆库', type: 'Profile', createdAt: now, updatedAt: now, props: {} };
-    let cnt = 0;
+    /* V1.2:去「记忆库」中心节点(用户裁定:无用);未编译档案无边,仅偏好节点 */
     const pref = function (section, label, value, edgeType, cat) {
       const id = 'Preference:' + section + ':' + value;
       nodes[id] = { id: id, label: label, type: 'Preference', createdAt: now, updatedAt: now,
         props: { section: section, value: value, cat: cat || SECTION_CAT[section] || 'misc' } };
-      edges.push({ id: 'pe' + (cnt++), source: center, target: id, type: edgeType || 'PREFERS', fact: '', validAt: now });
     };
     /* 记忆四模块(docs/15 F3):company=公司 / department=各部门 / style=策划案风格 / misc=其他偏好 */
     const SECTION_CAT = { companies: 'company', venues: 'company', budgetTier: 'company', audiences: 'company',
@@ -232,7 +229,9 @@ EP.memory = (function () {
     const nodes = Object.assign({}, g.nodes);
     let edges = g.edges || [];
     if (opts && opts.withProfile) {
-      const pg = profileGraph();
+      /* V1.1(docs/16):已编译记忆页面优先呈现(EP.wiki 为事实源);
+         未编译/无页面时维持 V1.0 行为 —— 档案实时活视图 */
+      const pg = (EP.wiki && EP.wiki.hasPages()) ? EP.wiki.wikiGraph() : profileGraph();
       Object.assign(nodes, pg.nodes);
       edges = edges.concat(pg.edges);
     }

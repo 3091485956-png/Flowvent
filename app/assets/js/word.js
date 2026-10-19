@@ -95,17 +95,17 @@ EP.word = (function () {
     const o = opts || {};
     const ppr = (o.style ? '<w:pStyle w:val="' + o.style + '"/>' : '') +
       (o.ind ? '<w:ind w:left="' + o.ind + '" w:hanging="' + (o.hanging || 0) + '"/>' : '') +
-      (o.border ? '<w:pBdr><w:left w:val="single" w:sz="18" w:space="4" w:color="2E5BE0"/></w:pBdr>' : '') +
+      (o.border ? '<w:pBdr><w:left w:val="single" w:sz="18" w:space="4" w:color="000000"/></w:pBdr>' : '') +
       (o.jc ? '<w:jc w:val="' + o.jc + '"/>' : '') +
       (o.before || o.after ? '<w:spacing w:before="' + (o.before || 0) + '" w:after="' + (o.after || 0) + '"/>' : '');
     return '<w:p>' + (ppr ? '<w:pPr>' + ppr + '</w:pPr>' : '') + runs(text, o) + '</w:p>';
   }
-  const ROW_FILL = { warn: 'FDF0EE', sum: 'EAF1FD', day: 'E9F5EC' };
+  const ROW_BOLD = { warn: false, sum: true, day: true };   /* 朴素文档:去填充色,合计/分日行加粗 */
   function table(head, rows) {
     const cols = Math.max(head.length, 1);
     const w = Math.floor(8286 / cols);                      // A4 内容宽(11906-2×1418-2×60 边距)约 8290 dxa
     const borders = ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']
-      .map(function (e) { return '<w:' + e + ' w:val="single" w:sz="4" w:space="0" w:color="9FB2D9"/>'; }).join('');
+      .map(function (e) { return '<w:' + e + ' w:val="single" w:sz="4" w:space="0" w:color="000000"/>'; }).join('');
     let x = '<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/><w:tblBorders>' + borders + '</w:tblBorders>' +
       '<w:tblCellMar><w:top w:w="40" w:type="dxa"/><w:left w:w="100" w:type="dxa"/>' +
       '<w:bottom w:w="40" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr>' +
@@ -116,9 +116,9 @@ EP.word = (function () {
         p(text, { bold: bold, sz: 18 }) + '</w:tc>';
     };
     x += '<w:tr><w:trPr><w:tblHeader/></w:trPr>' +
-      head.map(function (h) { return cell(h, 'E8EEF9', true); }).join('') + '</w:tr>';
+      head.map(function (h) { return cell(h, '', true); }).join('') + '</w:tr>';
     rows.forEach(function (r) {
-      x += '<w:tr>' + r.cells.map(function (c) { return cell(c, ROW_FILL[r.cls] || '', false); }).join('') + '</w:tr>';
+      x += '<w:tr>' + r.cells.map(function (c) { return cell(c, '', ROW_BOLD[r.cls] || false); }).join('') + '</w:tr>';
     });
     return x + '</w:tbl>';
   }
@@ -142,7 +142,7 @@ EP.word = (function () {
       if (/^>\s?/.test(t)) {
         const buf = [];
         while (i < lines.length && /^>\s?/.test(lines[i].trim())) { buf.push(lines[i].trim().replace(/^>\s?/, '')); i++; }
-        out.push(p(buf.join(' '), { ind: 240, border: true, italic: true, color: '44506B' }));
+        out.push(p(buf.join(' '), { ind: 240, border: true, italic: true }));
         continue;
       }
       if (/^\|/.test(t)) {
@@ -177,13 +177,13 @@ EP.word = (function () {
     let body = p(plan.name, { style: 'Title' }) +
       p([plan.form.date, plan.form.venue, (plan.form.headcount ? plan.form.headcount + ' 人' : ''),
         (plan.form.budgetTotal ? '预算 ¥' + Number(plan.form.budgetTotal).toLocaleString() : '')]
-        .filter(Boolean).join(' · '), { jc: 'center', sz: 18, color: '66708C', after: 160 }) +
+        .filter(Boolean).join(' · '), { jc: 'center', sz: 18, color: '595959', after: 160 }) +
       table(['项目', '内容'], S.metaRows(plan.form).map(function (r) { return { cells: r }; })) +
       p('', { sz: 8 });
     (plan.sections || []).forEach(function (s, idx) {
       body += p((S.CN[idx] || idx + 1) + '、' + s.title, { style: 'Heading1' }) + blocksToXml(s.md);
     });
-    body += p('秒策生成 · ' + new Date().toLocaleDateString('zh-CN'), { jc: 'right', sz: 16, color: '98A2B3' });
+    body += p('秒策生成 · ' + new Date().toLocaleDateString('zh-CN'), { jc: 'right', sz: 16, color: '808080' });
     return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
       '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' + body +
       '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>' +
@@ -201,13 +201,13 @@ EP.word = (function () {
     '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>' +
     '<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/><w:qFormat/>' +
     '<w:pPr><w:jc w:val="center"/><w:spacing w:before="120" w:after="120"/></w:pPr>' +
-    '<w:rPr><w:b/><w:sz w:val="40"/><w:szCs w:val="40"/><w:color w:val="0B2B66"/></w:rPr></w:style>' +
+    '<w:rPr><w:b/><w:sz w:val="40"/><w:szCs w:val="40"/></w:rPr></w:style>' +
     '<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>' +
     '<w:pPr><w:keepNext/><w:outlineLvl w:val="0"/><w:spacing w:before="320" w:after="140"/></w:pPr>' +
-    '<w:rPr><w:b/><w:sz w:val="30"/><w:szCs w:val="30"/><w:color w:val="0B2B66"/></w:rPr></w:style>' +
+    '<w:rPr><w:b/><w:sz w:val="30"/><w:szCs w:val="30"/></w:rPr></w:style>' +
     '<w:style w:type="paragraph" w:styleId="Heading3"><w:name w:val="heading 3"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>' +
     '<w:pPr><w:keepNext/><w:outlineLvl w:val="2"/><w:spacing w:before="220" w:after="100"/></w:pPr>' +
-    '<w:rPr><w:b/><w:sz w:val="24"/><w:szCs w:val="24"/><w:color w:val="1D3A7A"/></w:rPr></w:style>' +
+    '<w:rPr><w:b/><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr></w:style>' +
     '</w:styles>';
   const CONTENT_TYPES = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +

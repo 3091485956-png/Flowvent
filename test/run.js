@@ -20,7 +20,7 @@ global.localStorage = {
 
 const path = require('path');
 const J = f => path.join(__dirname, '..', 'app', 'assets', 'js', f);
-['icons', 'md', 'struct', 'profile', 'intake', 'memory', 'ai', 'storage', 'exporter', 'word'].forEach(m => require(J(m)));
+['icons', 'md', 'struct', 'profile', 'wiki', 'intake', 'memory', 'ai', 'storage', 'exporter', 'word'].forEach(m => require(J(m)));
 
 let pass = 0, fail = 0; const failures = []; const queue = [];
 function t(name, fn) { queue.push([name, fn]); }   // 入队,支持 async 断言(run 时统一执行)
@@ -171,11 +171,13 @@ t('文档名与章节标题进入 document.xml,特殊字符已转义', () => {
   assert.ok(xml.includes('2026 秋季全员团建&lt;测试&gt;'), '标题未转义或缺失');
   assert.ok(xml.includes('一、活动概述') && xml.includes('二、流程时间表'));
 });
-t('表格 / 表头着色 / {:sum} 行着色 / 加粗 run / 列表 / 引用边框', () => {
+t('表格 / 朴素黑白(无填充色) / {:sum} 行加粗 / 加粗 run / 列表 / 引用边框', () => {
   const xml = EP.word.docXml(PLAN());
   assert.ok(xml.includes('<w:tbl>'));
-  assert.ok(xml.includes('w:fill="E8EEF9"'), '表头未着色');
-  assert.ok(xml.includes('w:fill="EAF1FD"'), '{:sum} 行未着色');
+  assert.ok(!/w:fill="[EF0-9A-F]{6}"/.test(xml), '朴素文档不应有单元格填充色');
+  assert.ok(!/w:color="(?:0B2B66|1D3A7A|2E5BE0|9FB2D9)"/.test(xml), '朴素文档不应有彩色文字/边框');
+  const sumTr = xml.slice(xml.lastIndexOf('<w:tr>', xml.indexOf('签到')), xml.indexOf('签到') + 60);
+  assert.ok(sumTr.includes('<w:b/>'), '{:sum} 行未加粗:' + sumTr.slice(0, 120));
   assert.ok(/<w:r><w:rPr><w:b\/>/.test(xml), '加粗未生成独立 run');
   assert.ok(xml.includes('• 签到集合'), '无序列表前缀缺失');
   assert.ok(xml.includes('<w:pBdr>'), '引用左边框缺失');
@@ -532,7 +534,7 @@ t('graphOf(withProfile):档案条目实时呈现为 Preference 子图;remove 条
   const g = EP.memory.graphOf(s.id, { withProfile: true });
   const pref = Object.values(g.nodes).filter(n => n.type === 'Preference');
   assert.ok(pref.some(n => n.label.includes('星海科技')), '偏好节点未出现');
-  assert.ok(g.edges.some(e => e.type === 'PREFERS'), 'PREFERS 边缺失');
+  assert.ok(!Object.values(g.nodes).some(n => n.type === 'Profile'), '不应再有「记忆库」中心节点');
   /* 条目删除后子图即时收缩 */
   EP.profile.remove('companies', '星海科技');
   const g2 = EP.memory.graphOf(s.id, { withProfile: true });
@@ -737,6 +739,531 @@ t('parseEditReply:JSON 容错(裸 JSON / 围栏包裹 / 无 edit 纯对话 / 坏
   const r2 = EP.ai.parseEditReply('```json\n{"reply":"建议如下","edit":null}\n```');
   assert.ok(r2.reply === '建议如下' && !r2.edit);
   assert.throws(() => EP.ai.parseEditReply('这不是 JSON'), /无法解析/);
+});
+
+console.log('\n[15] rawLog 原始事件层(docs/16:Raw Sources,编译输入与溯源)');
+t('record 追加 rawLog:seq 单调递增,payload 按事件类型完整保留', () => {
+  global.localStorage.removeItem('ep_profile');
+  EP.profile.record(evE1('星海科技', '临湖山庄'));
+  EP.profile.record({ t: 'section_ai_op', at: NOW0, data: { title: '预算明细', op: 'regen' } });
+  const p = EP.profile.load();
+  assert.strictEqual(p.rawLog.length, 2, '事件未入原始层');
+  assert.strictEqual(p.rawLog[0].seq, 1);
+  assert.strictEqual(p.rawLog[1].seq, 2, 'seq 未递增');
+  assert.strictEqual(p.rawLog[0].t, 'plan_generated');
+  assert.strictEqual(p.rawLog[0].d.form.company, '星海科技', 'payload 丢失');
+});
+t('payload 深截断:长字段 400 字封顶(有界存储)', () => {
+  global.localStorage.removeItem('ep_profile');
+  EP.profile.record({ t: 'section_edited', at: NOW0, data: { title: '长文', prevMd: 'a'.repeat(1000), newMd: 'b'.repeat(900) } });
+  const p = EP.profile.load();
+  assert.ok(p.rawLog[0].d.prevMd.length <= 401, 'prevMd 未截断:' + p.rawLog[0].d.prevMd.length);
+  assert.ok(p.rawLog[0].d.newMd.length <= 401, 'newMd 未截断');
+});
+t('环形缓冲:超 200 条淘汰最旧,seq 继续前进(水位线不受影响)', () => {
+  global.localStorage.removeItem('ep_profile');
+  for (let i = 0; i < 205; i++) EP.profile.record({ t: 'selection_op', at: NOW0, data: { op: 'polish', before: 'x', after: 'y' } });
+  const p = EP.profile.load();
+  assert.strictEqual(p.rawLog.length, 200, '容量未封顶:' + p.rawLog.length);
+  assert.strictEqual(p.rawLog[0].seq, 6, '最旧 5 条未淘汰');
+  assert.strictEqual(p.seq, 205, '全局 seq 不能回退');
+});
+t('form_defaults 同签名去重:rawLog 与骨架口径一致(不重复占缓冲)', () => {
+  global.localStorage.removeItem('ep_profile');
+  for (let i = 0; i < 3; i++) EP.profile.record({ t: 'form_defaults', at: NOW0, data: { form: FORM() } });
+  const p = EP.profile.load();
+  assert.strictEqual(p.rawLog.filter(e => e.t === 'form_defaults').length, 1, '去重事件重复入原始层');
+});
+
+console.log('\n[16] EP.wiki:编译式记忆库(docs/16:页面/确定性编译/注入/lint/tombstone)');
+const seedProfile = () => {                                 // 供多个 wiki 测试复用的档案种子
+  EP.profile.record(evE1('星海科技', '临湖山庄'));
+  EP.profile.record(evE1('星海科技', '临湖山庄'));
+  EP.profile.record({ t: 'past_plan_parsed', at: NOW0, data: { name: '旧案', facts: [], preferences: [{ kind: 'rule', value: '致辞≤10分钟' }] } });
+  EP.profile.record({ t: 'preference_confirmed', at: NOW0, data: { value: '必有互动抽奖' } });
+};
+t('确定性编译:档案统计 → 实体/偏好页面,两级 level 与 hits 正确', async () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  seedProfile();
+  const r = await EP.wiki.compile({ local: true });
+  assert.strictEqual(r.mode, 'local');
+  const w = EP.wiki.load();
+  const pages = Object.keys(w.pages).map(k => w.pages[k]);
+  const comp = pages.find(p => p.sub === 'company' && p.title === '星海科技');
+  assert.ok(comp && comp.hits === 2 && comp.det, '公司实体页缺失或计数错误');
+  assert.ok(pages.find(p => p.title === '必有互动抽奖').level === 'confirmed', '确认级页面缺失');
+  assert.ok(pages.find(p => p.title === '致辞≤10分钟').level === 'inductive', '归纳级页面缺失');
+  assert.ok(pages.some(p => p.sub === 'venue' && p.title === '临湖山庄'), '场地页(只收集)缺失');
+});
+t('assemble(plan):两级注入 + 只收集字段不注入 + 280 字边界(铁律保持)', () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  seedProfile();
+  EP.wiki.compile({ local: true });
+  const s = EP.wiki.assemble('plan');
+  assert.ok(s.includes('严格遵守') && s.includes('必有互动抽奖'), '确认级缺失:' + s);
+  assert.ok(s.includes('致辞≤10分钟'), '归纳级缺失');
+  assert.ok(!s.includes('临湖山庄'), 'venue 页违反只收集不注入铁律');
+  assert.ok(s.length <= 280, '超长:' + s.length);
+});
+t('assemble:section 含结构向页面,polish 不含(P2-1 口径延续)', () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  EP.profile.record(evE2()); EP.profile.record(evE2()); EP.profile.record(evE2());
+  EP.wiki.compile({ local: true });
+  const sec = EP.wiki.assemble('section'), pol = EP.wiki.assemble('polish');
+  assert.ok(sec.includes('列表'), 'section 缺结构向观察:' + sec);
+  assert.ok(!pol.includes('列表'), 'polish 不应含结构向观察:' + pol);
+});
+t('水位线增量:已编译事件不重入批次;无新事件时编译为 none', async () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  seedProfile();
+  await EP.wiki.compile({ local: true });
+  assert.strictEqual((await EP.wiki.compile({ local: true })).mode, 'none', '无新事件仍重编');
+  EP.profile.record({ t: 'chat_message', at: NOW0, data: { text: '流程整体提前半小时' } });
+  assert.strictEqual(EP.wiki.pendingEvents().length, 1);
+  const r = await EP.wiki.compile({ local: true });
+  assert.strictEqual(r.eventsIn, 1, '批量事件数错误');
+});
+t('tombstone:删除页面后编译不复活', () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  seedProfile();
+  EP.wiki.compile({ local: true });
+  const w = EP.wiki.load();
+  const key = Object.keys(w.pages).find(k => w.pages[k].title === '星海科技');
+  assert.ok(EP.wiki.remove(key), '删除失败');
+  EP.profile.record({ t: 'chat_message', at: NOW0, data: { text: '再补一条指令制造新事件' } });
+  EP.wiki.compile({ local: true });
+  const w2 = EP.wiki.load();
+  assert.ok(!w2.pages[key], '已删页面被编译复活');
+  assert.ok(w2.tombstones.indexOf(key) >= 0, 'tombstone 未记录');
+});
+t('AI 补丁应用:链接悬空丢弃 / confirmed 需事件支撑 / 页面上限逐出(confirmed 保留)', () => {
+  global.localStorage.removeItem('ep_wiki');
+  global.localStorage.removeItem('ep_profile');
+  let w = EP.wiki.load();
+  const batch = [{ seq: 1, at: NOW0, t: 'preference_confirmed', d: { value: '必有互动抽奖' } }];
+  let r = EP.wiki._internals.applyPatch(w, { pages: [
+    { action: 'upsert', title: '组织:腾讯', kind: 'entity', cat: 'company', sub: 'company', body: '在 1 次活动中担任组织方', links: ['不存在页面'] },
+    { action: 'upsert', title: '茶歇必备', kind: 'preference', cat: 'misc', body: '观察', level: 'confirmed' },
+    { action: 'upsert', title: '必有互动抽奖', kind: 'preference', cat: 'misc', body: '观察', level: 'confirmed' }
+  ] }, batch);
+  w = r.wiki;
+  const entKey = 'entity:' + EP.wiki._internals.pageKey('entity', '组织:腾讯').split(':')[1];
+  const teaKey = 'preference:' + EP.wiki._internals.pageKey('preference', '茶歇必备').split(':')[1];
+  const lotKey = 'preference:' + EP.wiki._internals.pageKey('preference', '必有互动抽奖').split(':')[1];
+  assert.strictEqual(w.pages[entKey].links.length, 0, '悬空链接未丢弃');
+  assert.strictEqual(w.pages[teaKey].level, 'inductive', '无事件支撑的 confirmed 未降级');
+  assert.strictEqual(w.pages[lotKey].level, 'confirmed', '有支撑的 confirmed 被误降');
+  for (let i = 0; i < 8; i++) {                            // 逐出:连续补丁推过 80 页上限
+    const fill = [];
+    for (let j = 0; j < 12; j++) fill.push({ action: 'upsert', title: '填充页' + i + '-' + j, kind: 'preference', cat: 'misc', body: '填充', confidence: 0.1 });
+    w = EP.wiki._internals.applyPatch(w, { pages: fill }, []).wiki;
+  }
+  assert.ok(Object.keys(w.pages).length <= 80, '上限未生效:' + Object.keys(w.pages).length);
+  assert.ok(w.pages[lotKey], '确认级页面被逐出');
+});
+t('AI 补丁:reviews 落库且可裁决(ignore 闭环;不存在的 id 安静返回)', () => {
+  global.localStorage.removeItem('ep_wiki');
+  let w = EP.wiki.load();
+  w = EP.wiki._internals.applyPatch(w, { pages: [
+    { action: 'upsert', title: '常用场地', kind: 'entity', cat: 'company', sub: 'venue', body: '观察' }
+  ], reviews: [{ title: '常用场地', issue: '与新事件矛盾:场地已更换', suggestion: '更新页面' }] }, [{ seq: 1, at: NOW0, t: 'chat_message', d: { text: 'x' } }]).wiki;
+  EP.wiki.save(w);
+  assert.strictEqual(EP.wiki.openReviews().length, 1, 'review 未落库');
+  const rid = EP.wiki.openReviews()[0].id;
+  assert.ok(EP.wiki.resolveReview(rid, 'ignore'), 'ignore 未生效');
+  assert.strictEqual(EP.wiki.openReviews().length, 0, '裁决后仍 open');
+  assert.strictEqual(EP.wiki.resolveReview('r不存在', 'apply'), false, '不存在的 id 应安静返回');
+});
+t('迁移 init():无 ep_wiki 且档案非空 → 种子页面 + 水位线对齐;二次调用幂等', () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  seedProfile();
+  EP.wiki.init();
+  const w = EP.wiki.load();
+  const p = EP.profile.load();
+  assert.ok(Object.keys(w.pages).length >= 3, '种子页面缺失');
+  assert.strictEqual(w.watermark, p.seq, '水位线未对齐当前 seq');
+  const before = JSON.stringify(w);
+  EP.wiki.init();
+  assert.strictEqual(JSON.stringify(EP.wiki.load()), before, '二次 init 不是幂等');
+});
+t('lint:过时与孤页确定性检出', () => {
+  global.localStorage.removeItem('ep_wiki');
+  let w = EP.wiki.load();
+  const now = Date.now();
+  const k1 = EP.wiki._internals.pageKey('preference', '过时页面');
+  const k2 = EP.wiki._internals.pageKey('preference', '孤页');
+  w.pages[k1] = { key: k1, title: '过时页面', kind: 'preference', cat: 'misc', body: 'x', links: [], sources: [], level: 'inductive', confidence: 0.5, hits: 1, createdAt: now - 400 * DAY, updatedAt: now - 400 * DAY };
+  w.pages[k2] = { key: k2, title: '孤页', kind: 'preference', cat: 'misc', body: 'x', links: [], sources: [], level: 'inductive', confidence: 0.5, hits: 1, createdAt: now, updatedAt: now };
+  EP.wiki.save(w);
+  const issues = EP.wiki.lint();
+  assert.ok(issues.some(i => i.type === 'stale' && i.title === '过时页面'), '过时未检出');
+  assert.ok(issues.some(i => i.type === 'orphan' && i.title === '孤页'), '孤页未检出');
+});
+t('零回归兜底:wiki 无页面时 assemble 逐字节回退统计档案,注入结构不变', () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  EP.profile.record(evE1('星海科技', ''));
+  EP.profile.record(evE1('星海科技', ''));
+  assert.strictEqual(EP.wiki.assemble('plan'), EP.profile.summarize(EP.profile.load(), 'plan'), '回退不等价');
+  const mem = EP.profile.summarize(EP.profile.load(), 'plan');
+  const msgs = EP.ai.buildPlanMessages(FORM());
+  assert.strictEqual(msgs[1].content,
+    '活动信息如下:\n' + EP.ai.formBrief(FORM()) + '\n\n记忆库(该用户的历史使用观察,仅供参考;与上述活动信息冲突时,一律以活动信息为准):\n' + mem,
+    '注入结构漂移');
+});
+t('V1.1.1 相关性注入:实体选择优先与活动信息重合的页面(4-Signal 简化)', () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  EP.profile.record(evE1('星海科技', ''));
+  EP.profile.record(evE1('星海科技', ''));
+  EP.profile.record(evE1('北辰集团', ''));
+  EP.profile.record(evE1('北辰集团', ''));
+  EP.wiki.compile({ local: true });
+  const s1 = EP.wiki.assemble('plan', { form: Object.assign(FORM(), { company: '北辰集团' }) });
+  assert.ok(s1.includes('常用组织:北辰集团') && !s1.includes('星海科技'), '相关性未生效:' + s1);
+  const s2 = EP.wiki.assemble('plan', { form: FORM() });       // 与星海科技重合
+  assert.ok(s2.includes('常用组织:星海科技'), '默认上下文相关性异常:' + s2);
+});
+t('V1.1.1 图谱洞察:枢纽 / 跨模块桥接 / 模块缺口', () => {
+  global.localStorage.removeItem('ep_wiki');
+  let w = EP.wiki.load();
+  const pk = EP.wiki._internals.pageKey;
+  const k1 = pk('entity', '腾讯'), k2 = pk('preference', '年会传统'), k3 = pk('preference', '文风A'), k4 = pk('preference', '常办:一天');
+  w.pages[k1] = { key: k1, title: '腾讯', kind: 'entity', cat: 'company', sub: 'company', body: 'x', links: [], sources: [], level: 'inductive', hits: 2, createdAt: 1, updatedAt: 1 };
+  w.pages[k2] = { key: k2, title: '年会传统', kind: 'preference', cat: 'misc', sub: '', body: 'x', links: [k1], sources: [], level: 'inductive', hits: 1, createdAt: 1, updatedAt: 1 };
+  w.pages[k3] = { key: k3, title: '文风A', kind: 'preference', cat: 'style', sub: '', body: 'x', links: [], sources: [], level: 'inductive', hits: 1, createdAt: 1, updatedAt: 1 };
+  w.pages[k4] = { key: k4, title: '常办:一天', kind: 'preference', cat: 'company', sub: '', body: 'x', links: [k1], sources: [], level: 'inductive', hits: 1, createdAt: 1, updatedAt: 1 };
+  EP.wiki.save(w);
+  const ins = EP.wiki.insights();
+  assert.ok(ins.hubs.some(h => h.title === '腾讯' && h.deg === 2), '枢纽页未检出:' + JSON.stringify(ins.hubs));
+  assert.ok(ins.bridges.some(b => b.title === '年会传统'), '跨模块桥接未检出(misc→company)');
+  assert.ok(ins.gaps.some(g => g.cat === '各部门'), '模块缺口未检出');
+});
+t('V1.1.1 toMarkdown:索引 + [[wikilink]] 互链 + 元信息行(Obsidian 兼容)', () => {
+  global.localStorage.removeItem('ep_wiki');
+  let w = EP.wiki.load();
+  const pk = EP.wiki._internals.pageKey;
+  const k1 = pk('entity', '腾讯'), k2 = pk('preference', '年会传统');
+  w.pages[k1] = { key: k1, title: '腾讯', kind: 'entity', cat: 'company', sub: 'company', body: '在 2 次活动中担任组织方', links: [], sources: [], level: 'inductive', hits: 2, createdAt: 1, updatedAt: 1 };
+  w.pages[k2] = { key: k2, title: '年会传统', kind: 'preference', cat: 'misc', sub: '', body: '领导开场表演', links: [k1], sources: [1], level: 'confirmed', confidence: 0.9, hits: 1, createdAt: 1, updatedAt: 1 };
+  EP.wiki.save(w);
+  const md = EP.wiki.toMarkdown();
+  assert.ok(md.includes('# 秒策记忆库') && md.includes('## 索引'), '缺索引头');
+  assert.ok(md.includes('- [[腾讯]](公司 · 实体)'), '索引行格式异常');
+  assert.ok(md.includes('## 年会传统') && md.includes('确认级'), '页面节或级别行缺失');
+  assert.ok(md.includes('相关:[[腾讯]]'), '互链缺失');
+  assert.ok(md.includes('领导开场表演'), '正文缺失');
+});
+
+console.log('\n[18] V1.2 第一批:选区意图 / 保质期 / 不记清单 / 免记忆开关 / 小红点');
+t('F1 buildTextMessages:意图拼入 user 消息并截 200 字;custom 空意图被 textOp 拒绝', async () => {
+  const m1 = EP.ai.buildTextMessages('polish', '原文', '改正式一点');
+  assert.ok(m1[1].content.includes('原文') && m1[1].content.includes('用户对这段文字的要求:改正式一点'), '意图未拼入:' + m1[1].content);
+  const m2 = EP.ai.buildTextMessages('polish', '原文', '');
+  assert.strictEqual(m2[1].content, '原文', '空意图不应拼接');
+  const m3 = EP.ai.buildTextMessages('custom', '原文', 'x'.repeat(300));
+  assert.ok(m3[1].content.length < '原文'.length + 300, '意图未截断');
+  assert.ok(m3[0].content.includes('按用户给出的要求'), 'custom 应走自定义契约');
+  await assert.rejects(() => EP.ai.textOp('custom', '原文', '  '), /填写/);
+});
+t('F1 selection_op 意图入偏好管道:强意图词加权立即达确认门槛', () => {
+  global.localStorage.removeItem('ep_profile');
+  EP.profile.record({ t: 'selection_op', at: NOW0, data: { op: 'rewrite', instruction: '以后这段都不要提钱', before: 'a', after: 'b' } });
+  assert.ok(EP.profile.pendingSuggestions().some(s => s.value.includes('不要提钱')), '强意图未立即触发');
+  global.localStorage.removeItem('ep_profile');
+  EP.profile.record({ t: 'selection_op', at: NOW0, data: { op: 'rewrite', instruction: '语气改正式一点', before: 'a', after: 'b' } });
+  assert.strictEqual(EP.profile.pendingSuggestions().length, 0, '普通意图不应一次触发');
+});
+t('F2 保质期标注:归纳级页面按新旧加观察时间,超 180 天标可能过时,confirmed 不加', () => {
+  global.localStorage.removeItem('ep_wiki');
+  let w = EP.wiki.load();
+  const now = Date.now();
+  const pk = EP.wiki._internals.pageKey;
+  const kf = pk('preference', '新偏好'), km = pk('preference', '中龄偏好'), ko = pk('preference', '老偏好'), kc = pk('preference', '确认偏好');
+  w.pages[kf] = { key: kf, title: '新偏好', kind: 'preference', cat: 'misc', sub: '', body: 'x', links: [], sources: [], level: 'inductive', hits: 3, createdAt: now, updatedAt: now };
+  w.pages[km] = { key: km, title: '中龄偏好', kind: 'preference', cat: 'misc', sub: '', body: 'x', links: [], sources: [], level: 'inductive', hits: 3, createdAt: now - 90 * DAY, updatedAt: now - 90 * DAY };
+  w.pages[ko] = { key: ko, title: '老偏好', kind: 'preference', cat: 'misc', sub: '', body: 'x', links: [], sources: [], level: 'inductive', hits: 3, createdAt: now - 400 * DAY, updatedAt: now - 400 * DAY };
+  w.pages[kc] = { key: kc, title: '确认偏好', kind: 'preference', cat: 'misc', sub: '', body: 'x', links: [], sources: [], level: 'confirmed', hits: 3, createdAt: now - 400 * DAY, updatedAt: now - 400 * DAY };
+  EP.wiki.save(w);
+  const s = EP.wiki.assemble('plan');
+  assert.ok(!s.includes('新偏好('), '新页面不应带标注');
+  assert.ok(s.includes('中龄偏好(90 天前观察)'), '中龄未标注:' + s);
+  assert.ok(s.includes('老偏好(400 天前观察,可能过时)'), '过时未警示:' + s);
+  assert.ok(!/确认偏好\(\d+ 天前/.test(s), '确认级不应带标注:' + s);
+});
+t('F3 不记清单:applyPatch 粗滤活动级实体页(日期/人数/金额特征)', () => {
+  global.localStorage.removeItem('ep_wiki');
+  const r = EP.wiki._internals.applyPatch(EP.wiki.load(), { pages: [
+    { action: 'upsert', title: '2026-01-20 年会', kind: 'entity', cat: 'company', sub: '', body: 'x' },
+    { action: 'upsert', title: '300 人的活动', kind: 'entity', cat: 'company', sub: '', body: 'x' },
+    { action: 'upsert', title: '腾讯', kind: 'entity', cat: 'company', sub: 'company', body: '在 2 次活动中担任组织方' }
+  ] }, []);
+  const titles = Object.keys(r.wiki.pages).map(k => r.wiki.pages[k].title);
+  assert.ok(!titles.includes('2026-01-20 年会'), '日期页未过滤');
+  assert.ok(!titles.includes('300 人的活动'), '人数页未过滤');
+  assert.ok(titles.includes('腾讯'), '正常实体被误杀');
+});
+t('F3 编译契约含不记条款(分析器与写入器)', () => {
+  const msgs = EP.ai.buildWikiAnalyzeMessages([{ seq: 1, at: NOW0, t: 'plan_generated', d: { form: {} } }], [], []);
+  assert.ok(msgs[0].content.includes('不构成记忆'), '分析器缺不记条款');
+  const wm = EP.ai.buildWikiWriteMessages({ notes: [], contradictions: [], plan: '' }, [], []);
+  assert.ok(wm[0].content.includes('不建「活动本身」的页面'), '写入器缺不记条款');
+});
+t('F4 noMemory:勾选后 plan prompt 与无档案用户逐字节一致', () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  EP.profile.record(evE1('星海科技', ''));
+  EP.profile.record(evE1('星海科技', ''));
+  const withMem = EP.ai.buildPlanMessages(FORM());
+  assert.ok(withMem[1].content.includes('记忆库'), '前置失败:档案应注入');
+  const off = EP.ai.buildPlanMessages(FORM(), true);
+  assert.strictEqual(off[1].content, '活动信息如下:\n' + EP.ai.formBrief(FORM()), 'noMemory 未短路');
+});
+t('F5 badgeCount:矛盾优先,积压 ≥6 才提醒', () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  assert.strictEqual(EP.wiki.badgeCount(), null, '空态不应有徽标');
+  for (let i = 0; i < 6; i++) EP.profile.record({ t: 'chat_message', at: NOW0, data: { text: '指令' + i + '号内容' } });
+  let c = EP.wiki.badgeCount();
+  assert.ok(c && c.kind === 'pending' && c.n >= 6, '积压未提醒:' + JSON.stringify(c));
+  let w = EP.wiki.load();
+  w.reviews.push({ id: 'rb1', pageKey: 'x', title: 't', issue: 'i', suggestion: '', status: 'open', at: NOW0 });
+  EP.wiki.save(w);
+  c = EP.wiki.badgeCount();
+  assert.ok(c && c.kind === 'review', '矛盾应优先于积压');
+});
+
+console.log('\n[19] V1.2 第二批:接受信号 / 检索描述 / 偏好带 Why / 导入分类型');
+t('F6 注入追踪与认可回流:assemble 标记 → verifyExport 加 verified 与置信度(0.98 封顶)', () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  seedProfile();
+  EP.wiki.compile({ local: true });
+  EP.wiki.assemble('plan');
+  EP.wiki.assemble('plan');
+  let keys = EP.wiki.consumedKeys();
+  assert.ok(keys.length >= 1, '未记录注入页面');
+  const kc = keys.find(k => EP.wiki.load().pages[k] && EP.wiki.load().pages[k].level === 'confirmed');
+  assert.ok(kc, '确认页未入选');
+  let pg = EP.wiki.load().pages[kc];
+  assert.strictEqual(pg.injectedCount, 2, '注入计数错误:' + pg.injectedCount);
+  const conf0 = pg.confidence;
+  EP.wiki.verifyExport(keys);
+  pg = EP.wiki.load().pages[kc];
+  assert.strictEqual(pg.verified, 1, '认可未回流');
+  assert.ok(pg.confidence > conf0 && pg.confidence <= 0.98, '置信度未升或超上限');
+  for (let i = 0; i < 30; i++) EP.wiki.verifyExport(keys);       // 反复导出也封顶
+  pg = EP.wiki.load().pages[kc];
+  assert.ok(pg.confidence <= 0.98, '0.98 上限失效:' + pg.confidence);
+});
+t('F7 检索描述:确定性模板落 desc;AI 补丁 desc 落库且截 40 字', () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  seedProfile();
+  EP.wiki.compile({ local: true });
+  const w = EP.wiki.load();
+  const comp = Object.keys(w.pages).map(k => w.pages[k]).find(p => p.sub === 'company');
+  assert.ok(comp.desc && comp.desc.includes('组织方'), '实体 desc 模板缺失:' + comp.desc);
+  const r = EP.wiki._internals.applyPatch(EP.wiki.load(), { pages: [
+    { action: 'upsert', title: '品牌口径页', kind: 'preference', cat: 'misc', sub: '', desc: 'd'.repeat(60), body: 'x' }
+  ] }, []);
+  assert.strictEqual(r.wiki.pages[EP.wiki._internals.pageKey('preference', '品牌口径页')].desc.length, 40, 'desc 未截断');
+});
+t('F7 相关性按 title+desc 匹配(标题无关键词、描述有时可命中)', () => {
+  global.localStorage.removeItem('ep_wiki');
+  let w = EP.wiki.load();
+  const pk = EP.wiki._internals.pageKey;
+  const k1 = pk('preference', '甲条目'), k2 = pk('preference', '乙条目');
+  w.pages[k1] = { key: k1, title: '甲条目', kind: 'preference', cat: 'misc', sub: '', desc: '与预算科目相关的偏好', body: 'x', links: [], sources: [], level: 'confirmed', hits: 3, createdAt: 1, updatedAt: 1 };
+  w.pages[k2] = { key: k2, title: '乙条目', kind: 'preference', cat: 'misc', sub: '', desc: '与预算无关', body: 'y', links: [], sources: [], level: 'confirmed', hits: 3, createdAt: 1, updatedAt: 1 };
+  EP.wiki.save(w);
+  const s = EP.wiki.assemble('plan', { form: { notes: '注意预算科目要拆细', company: '', venue: '', name: '', type: 'other', audience: '' } });
+  assert.ok(s.indexOf('甲条目') < s.indexOf('乙条目'), 'desc 命中未优先:' + s);
+});
+t('F8 偏好带 Why:确认原话落档案,编译进 confirmed 页正文', () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  EP.profile.record({ t: 'preference_confirmed', at: NOW0, data: { value: '致辞不超过10分钟', why: '上次年会被老板吐槽超时' } });
+  const p = EP.profile.load();
+  assert.strictEqual(p.facts.preferences[0].why, '上次年会被老板吐槽超时', 'why 未落档案');
+  EP.wiki.compile({ local: true });
+  const w = EP.wiki.load();
+  const pg = w.pages[EP.wiki._internals.pageKey('preference', '致辞不超过10分钟')];
+  assert.ok(pg.body.includes('原因:上次年会被老板吐槽超时'), 'why 未进页面正文:' + pg.body);
+});
+t('F9 导入分类型:buildParseMessages 按类型切换契约与容量', () => {
+  const plan = EP.ai.buildParseMessages('正文', 'plan');
+  const org = EP.ai.buildParseMessages('正文', 'org');
+  assert.ok(plan[0].content.includes('策划分析师'), '策划案契约错误');
+  assert.ok(org[0].content.includes('管理制度分析员'), '制度契约错误');
+  assert.ok(org[0].content.includes('品牌口径'), '制度契约缺偏好口径');
+});
+
+console.log('\n[17] 记忆库 AI 编译契约(docs/16:Two-Step CoT,prompt 纯函数 + 桩 fetch)');
+t('buildWikiAnalyzeMessages:含事件批次 / 现有页面 / tombstone 禁建声明', () => {
+  const batch = [{ seq: 3, at: NOW0, t: 'plan_generated', d: { form: { company: '腾讯' } } }];
+  const msgs = EP.ai.buildWikiAnalyzeMessages(batch,
+    [{ title: '组织:腾讯', kind: 'entity', cat: 'company', level: 'inductive', body: '在 2 次活动中担任组织方' }],
+    ['preference:abc123']);
+  assert.ok(msgs[0].content.includes('分析器'), '缺 system 契约');
+  assert.ok(msgs[1].content.includes('#3 [plan_generated]'), '事件未进 prompt');
+  assert.ok(msgs[1].content.includes('组织:腾讯'), '现有页面未进 prompt');
+  assert.ok(msgs[1].content.includes('preference:abc123'), 'tombstone 未声明');
+});
+t('buildWikiWriteMessages:含分析 JSON / 事件 / 可引用页面标题白名单', () => {
+  const analysis = { notes: ['腾讯为组织方'], contradictions: [], plan: '更新组织页' };
+  const msgs = EP.ai.buildWikiWriteMessages(analysis,
+    [{ seq: 3, at: NOW0, t: 'plan_generated', d: { form: { company: '腾讯' } } }],
+    [{ title: '组织:腾讯' }]);
+  assert.ok(msgs[1].content.includes('更新组织页'), '分析结果未进第二步 prompt');
+  assert.ok(msgs[1].content.includes('组织:腾讯'), '可引用标题未列出');
+});
+t('parseWikiPatch:围栏容错 + 形状净化 + 坏 JSON 报错', () => {
+  const r = EP.ai.parseWikiPatch('```json\n{"pages":[{"action":"upsert","title":"组织:腾讯","kind":"entity","cat":"company","sub":"company","body":"x","links":["不存在"],"level":"confirmed"}],"reviews":[{"title":"t","issue":"i"}]}\n```');
+  assert.strictEqual(r.pages.length, 1);
+  assert.strictEqual(r.pages[0].kind, 'entity');
+  assert.strictEqual(r.reviews.length, 1);
+  assert.throws(() => EP.ai.parseWikiPatch('不是 JSON'), /无法解析/);
+});
+t('compileWiki 两步串行:分析 JSON 进入第二步 prompt', async () => {
+  global.localStorage.setItem('ep_ai', JSON.stringify({ baseURL: 'http://x', apiKey: 'k', model: 'm' }));
+  const origFetch = global.fetch;
+  const bodies = [];
+  global.fetch = async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    const content = bodies.length === 1
+      ? '{"notes":["腾讯为组织方"],"contradictions":[],"plan":"更新组织页"}'
+      : '{"pages":[{"action":"upsert","title":"组织:腾讯","kind":"entity","cat":"company","sub":"company","body":"在 1 次活动中担任组织方","links":[],"level":"inductive","confidence":0.8}],"reviews":[]}';
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+  };
+  try {
+    const r = await EP.ai.compileWiki([{ seq: 1, at: NOW0, t: 'plan_generated', d: { form: { company: '腾讯' } } }], [], []);
+    assert.strictEqual(bodies.length, 2, '两步调用未发生:' + bodies.length);
+    assert.ok(bodies[1].messages[1].content.includes('更新组织页'), '第一步分析未进入第二步');
+    assert.strictEqual(r.patch.pages[0].title, '组织:腾讯');
+  } finally { global.fetch = origFetch; }
+});
+t('wiki.compile AI 路径:补丁落库 + review 产生 + 水位线推进;force 失败如实上抛、非 force 回落本地', async () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  global.localStorage.setItem('ep_ai', JSON.stringify({ baseURL: 'http://x', apiKey: 'k', model: 'm' }));
+  EP.profile.record(evE1('腾讯', ''));
+  const origFetch = global.fetch;
+  let calls = 0;
+  global.fetch = async () => {
+    calls++;
+    const content = calls === 1 ? '{"notes":[],"contradictions":[],"plan":"记录公司"}'
+      : '{"pages":[{"action":"upsert","title":"腾讯","kind":"entity","cat":"company","sub":"company","body":"在 1 次活动中担任组织方","links":[],"level":"inductive"}],"reviews":[{"title":"腾讯","issue":"与既有页面口径不一","suggestion":"更新"}]}';
+    return new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 });
+  };
+  try {
+    const r = await EP.wiki.compile({ force: true });
+    assert.strictEqual(r.mode, 'ai', '未走 AI 路径:' + r.mode);
+    const w = EP.wiki.load();
+    assert.ok(w.pages['entity:' + EP.wiki._internals.pageKey('entity', '腾讯').split(':')[1]], '补丁页面未落库');
+    assert.strictEqual(EP.wiki.openReviews().length, 1, 'review 未落库');
+    assert.strictEqual(w.watermark, EP.profile.load().seq, '水位线未推进');
+  } finally { global.fetch = origFetch; }
+  global.localStorage.removeItem('ep_wiki');
+  global.fetch = async () => { throw new Error('网络错误'); };
+  try {
+    await assert.rejects(() => EP.wiki.compile({ force: true }), /网络错误/);
+    const r2 = await EP.wiki.compile();                     // 非 force:静默回落本地编译
+    assert.strictEqual(r2.mode, 'local', '失败未回落本地编译:' + r2.mode);
+  } finally { global.fetch = origFetch; }
+});
+
+console.log('\n[20] V1.2 第三批:精灵契约与动作 / 笔记并入编译源 / 朴素 Word / 去中心节点');
+t('F10 buildButlerMessages:含指令/清单/矛盾;parseButlerReply 容错与净化', () => {
+  const msgs = EP.ai.buildButlerMessages('删掉旧场地',
+    [{ key: 'k1', title: '腾讯', desc: '组织方', cat: 'company', level: 'inductive' }],
+    [{ key: 'k1', title: '腾讯', body: '在 2 次活动中担任组织方' }],
+    [{ id: 'r9', title: '致辞', issue: '与 15 分钟矛盾' }]);
+  assert.ok(msgs[0].content.includes('记忆库管理精灵'), '缺 system 契约');
+  assert.ok(msgs[1].content.includes('用户指令:删掉旧场地'), '缺指令');
+  assert.ok(msgs[1].content.includes('k1 | 腾讯'), '缺清单');
+  assert.ok(msgs[1].content.includes('矛盾id r9'), '缺矛盾');
+  const r = EP.ai.parseButlerReply('```json\n{"reply":"好的","actions":[{"type":"update","key":"k1","body":"新正文"}]}\n```');
+  assert.ok(r.actions.length === 1 && r.actions[0].type === 'update');
+  assert.throws(() => EP.ai.parseButlerReply('不是JSON'), /无法解析/);
+});
+t('F10 applyActions:改名走 tombstone / merge 并链删次页 / resolve 生效 / 动作入事件层', () => {
+  global.localStorage.removeItem('ep_wiki');
+  global.localStorage.removeItem('ep_profile');
+  let w = EP.wiki.load();
+  const pk = EP.wiki._internals.pageKey;
+  const k1 = pk('preference', '旧名页'), k2 = pk('preference', '次页'), k3 = pk('preference', '第三页');
+  w.pages[k1] = { key: k1, title: '旧名页', kind: 'preference', cat: 'misc', sub: '', desc: '', body: '旧正文', links: [], sources: [], level: 'inductive', confidence: 0.6, hits: 1, createdAt: 1, updatedAt: 1 };
+  w.pages[k2] = { key: k2, title: '次页', kind: 'preference', cat: 'misc', sub: '', desc: '', body: '次正文', links: [k3], sources: [], level: 'inductive', confidence: 0.6, hits: 1, createdAt: 1, updatedAt: 1 };
+  w.pages[k3] = { key: k3, title: '第三页', kind: 'preference', cat: 'misc', sub: '', desc: '', body: '三', links: [], sources: [], level: 'inductive', confidence: 0.6, hits: 1, createdAt: 1, updatedAt: 1 };
+  w.reviews.push({ id: 'rz1', pageKey: k3, title: '第三页', issue: 'i', suggestion: '', status: 'open', at: 1 });
+  EP.wiki.save(w);
+  let r = EP.wiki.applyActions([{ type: 'update', key: k1, title: '新名页', body: '新正文' }]);
+  assert.strictEqual(r.applied, 1);
+  let w2 = EP.wiki.load();
+  const nk = pk('preference', '新名页');
+  assert.ok(w2.pages[nk] && w2.pages[nk].body === '新正文', '改名页缺失');
+  assert.ok(!w2.pages[k1] && w2.tombstones.indexOf(k1) >= 0, '旧 key 未 tombstone');
+  r = EP.wiki.applyActions([{ type: 'merge', key: nk, key2: k3 }]);
+  assert.ok(r.applied >= 1, 'merge 未生效');
+  w2 = EP.wiki.load();
+  assert.ok(!w2.pages[k3] && w2.tombstones.indexOf(k3) >= 0, '次页未删/tombstone');
+  assert.ok(w2.pages[nk].links.indexOf(k3) < 0, '合并后不应自链');
+  const k4 = pk('preference', '第四页');
+  let w3 = EP.wiki.load();
+  w3.pages[k4] = { key: k4, title: '第四页', kind: 'preference', cat: 'misc', sub: '', desc: '', body: 'x', links: [], sources: [], level: 'inductive', confidence: 0.6, hits: 1, createdAt: 1, updatedAt: 1 };
+  w3.reviews.push({ id: 'rz2', pageKey: k4, title: '第四页', issue: 'i2', suggestion: '', status: 'open', at: 1 });
+  EP.wiki.save(w3);
+  EP.wiki.applyActions([{ type: 'resolve', key: 'rz2' }]);
+  assert.strictEqual(EP.wiki.openReviews().length, 0, 'resolve 未生效');
+  assert.ok(EP.profile.load().rawLog.some(e => e.t === 'memory_butler_op'), '精灵动作未入事件层');
+});
+t('F11 笔记并入编译源:变更文件成 note 事件进 AI 批次,hash 去重后不重发', async () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  global.localStorage.removeItem('ep_memory');
+  global.localStorage.setItem('ep_ai', JSON.stringify({ baseURL: 'http://x', apiKey: 'k', model: 'm' }));
+  EP.profile.record(evE1('腾讯', ''));
+  const st = EP.memory.createStore('库', '');
+  EP.memory.importFiles(st.id, [{ path: 'notes/a.md', text: '# 公司制度\n## 用车规范\n详见 [[报销]]', mtime: 1 }]);
+  const origFetch = global.fetch;
+  let captured = null;
+  global.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    if (body.messages && String(body.messages[1].content).includes('note_file_seen')) captured = body.messages[1].content;
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"notes":[],"contradictions":[],"plan":"x"}' } }] }), { status: 200 });
+  };
+  try {
+    await EP.wiki.compile({ force: true });
+    assert.ok(captured && captured.includes('公司制度'), '笔记标题未进编译批次');
+    assert.ok(EP.wiki.load().noteHashes && Object.keys(EP.wiki.load().noteHashes).length === 1, 'hash 未登记');
+    const r2 = await EP.wiki.compile({ force: true, local: true });
+    assert.strictEqual(r2.mode, 'none', '笔记未变更不应重编');
+  } finally { global.fetch = origFetch; }
+});
+t('朴素 Word:无填充色与主题色,{:sum} 行加粗', () => {
+  const xml = EP.word.docXml(PLAN());
+  assert.ok(!/w:fill="[EF0-9A-F]{6}"/.test(xml), '不应有填充色');
+  assert.ok(!/w:color="(?:0B2B66|1D3A7A|2E5BE0|9FB2D9)"/.test(xml), '不应有主题色');
+  const sumTr = xml.slice(xml.lastIndexOf('<w:tr>', xml.indexOf('签到')), xml.indexOf('签到') + 60);
+  assert.ok(sumTr.includes('<w:b/>'), '{:sum} 行未加粗');
+});
+t('去中心节点:wiki 图与档案活视图均无「记忆库」节点', () => {
+  global.localStorage.removeItem('ep_profile');
+  global.localStorage.removeItem('ep_wiki');
+  seedProfile();
+  EP.wiki.compile({ local: true });
+  const wg = EP.wiki.wikiGraph();
+  assert.ok(Object.keys(wg.nodes).length >= 3, '页面节点缺失');
+  assert.ok(!Object.values(wg.nodes).some(n => n.label === '记忆库' || n.type === 'Profile'), 'wiki 图仍有中心节点');
+  const pg = EP.memory.graphOf('', { withProfile: true });
+  assert.ok(!Object.values(pg.nodes).some(n => n.type === 'Profile'), '档案活视图仍有中心节点');
 });
 
 console.log('\n' + '='.repeat(52));

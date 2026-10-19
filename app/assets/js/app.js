@@ -5,6 +5,14 @@ EP.app = (function () {
   const state = { view: 'home', panel: '', plan: null };
 
   /* ───────── 通用 ───────── */
+  /* V1.2 F5:抽屉「记忆库」小红点(矛盾数优先,其次积压事件);打开记忆面板即清除 */
+  function refreshMemBadge() {
+    const b = $('mem-badge');
+    if (!b || !EP.wiki || !EP.wiki.badgeCount) return;
+    const c = EP.wiki.badgeCount();
+    if (c) { b.textContent = c.kind === 'review' ? c.n : '+' + c.n; b.hidden = false; }
+    else b.hidden = true;
+  }
   function toast(msg, type) {
     const t = document.createElement('div');
     t.className = 'toast' + (type ? ' ' + type : '');
@@ -144,6 +152,7 @@ EP.app = (function () {
     $('f-start').value = '09:00';
     $('f-festival').value = '';   // 条件字段一并重置:节日不设默认值(静默注入「端午」曾污染方案),由必填校验兜底
     $('f-duration').value = 'day'; $('f-venueType').value = 'office'; $('f-audience').value = 'staff';
+    $('f-nomemory').checked = false;   // V1.2 F4:重置后再按草稿恢复
     if (draft) {
       $('f-company').value = draft.company || ''; $('f-name').value = draft.name || '';
       $('f-purpose').value = draft.purpose || ''; $('f-date').value = draft.date || '';
@@ -153,6 +162,7 @@ EP.app = (function () {
       $('f-audience').value = draft.audience || 'staff'; $('f-notes').value = draft.notes || '';
       $('f-type').value = preType || draft.type || '';
       $('f-festival').value = draft.festival || ''; $('f-product').value = draft.product || '';
+      $('f-nomemory').checked = !!draft.nomemory;   // V1.2 F4
     } else {
       $('f-type').value = preType || '';
     }
@@ -187,7 +197,8 @@ EP.app = (function () {
       venueType: $('f-venueType').value, venue: $('f-venue').value.trim(),
       budgetTotal: num('f-budget'), audience: $('f-audience').value, notes: $('f-notes').value.trim(),
       festival: type === 'festival' ? ($('f-festival').value || '') : '',
-      product: type === 'product_launch' ? ($('f-product') ? $('f-product').value.trim() : '') : ''
+      product: type === 'product_launch' ? ($('f-product') ? $('f-product').value.trim() : '') : '',
+      nomemory: $('f-nomemory') ? $('f-nomemory').checked : false   // V1.2 F4:随草稿持久化,不进 prompt 上下文
     };
   }
   function validate() {
@@ -260,6 +271,7 @@ EP.app = (function () {
     try {
       const raw = await EP.ai.generatePlanStream(f, {
         effort: $('f-effort') ? $('f-effort').value : 'high',
+        noMemory: !!f.nomemory,   // V1.2 F4:勾选后本次生成不带任何记忆注入
         onThinking: function (t) {
           if (think.hidden) { think.hidden = false; advance(1); }
           thinkLen += t.length;
@@ -307,6 +319,10 @@ EP.app = (function () {
     $('gen-title').textContent = '方案生成完成!';
     $('gen-sub').textContent = '共 ' + plan.sections.length + ' 个章节,正在打开文档…';
     EP.profile.record({ t: 'plan_generated', data: { form: plan.form } });   // E1:公司事实/预算档位/人群
+    if (EP.wiki) plan.memUsed = { keys: EP.wiki.consumedKeys(), at: Date.now() };   /* V1.2 F6:生成时注入了哪些页面,导出时回流认可 */
+    /* V1.1(docs/16):事件已入 rawLog,后台增量编译记忆库(静默助理:成功不打扰,
+       失败自动回落本地编译,记忆面板可手动编译与查看编译日志) */
+    if (EP.wiki) EP.wiki.compile().then(refreshMemBadge).catch(function () { });
     const saved = EP.store.savePlan(plan);
     if (!saved || saved.saved !== false) EP.store.clearDraft();   /* M7:存储写失败时保留草稿,方案仅存内存,用户误关页不至两头皆空 */
     setTimeout(function () {
@@ -324,13 +340,15 @@ EP.app = (function () {
       /* B1 偏好确认闭环(docs/14):同一特殊需求重复 ≥3 次 → 询问是否设为默认;拒绝则冷却 */
       const sug = EP.profile.pendingSuggestions()[0];
       if (sug) {
-        const d = document.createElement('p');
+        const d = document.createElement('div');
         d.style.cssText = 'color:var(--ink-2);font-size:14px;line-height:1.7';
-        d.textContent = '检测到你在 ' + sug.count + ' 次生成中都要求「' + sug.value + '」。设为默认偏好后,之后的生成将严格遵守这一要求;可随时在「记忆库」中删除。';
+        d.innerHTML = '<p style="margin:0 0 10px">检测到你在 ' + sug.count + ' 次生成中都要求「' + EP.md.esc(sug.value) + '」。设为默认偏好后,之后的生成将严格遵守这一要求;可随时在「记忆库」中删除。</p>' +
+          '<textarea id="sug-why" class="sel-input" rows="2" placeholder="为什么?(可选,帮助 AI 拿捏分寸,如:上次被老板吐槽超时)"></textarea>';
         modal('设为默认偏好?', d, [
           { txt: '不用了', fn: function () { EP.profile.record({ t: 'preference_rejected', data: { value: sug.value } }); } },
           { txt: '设为默认', cls: 'btn-primary', fn: function () {
-            EP.profile.record({ t: 'preference_confirmed', data: { value: sug.value } });
+            const why = $('sug-why') ? $('sug-why').value.trim() : '';
+            EP.profile.record({ t: 'preference_confirmed', data: { value: sug.value, why: why } });
             toast('已设为默认偏好,之后的生成将严格遵守');
           } }
         ], { sticky: true });   /* 6.2:确认类弹窗不因遮罩/ESC 消失,必须明确选择 */
@@ -462,6 +480,8 @@ EP.app = (function () {
     if (editMatch) { EP.doceditor.open(editMatch[1]); return; }
     fillTypeSelect($('f-type'), true);
     EP.mountIcons();           // 渲染 index.html 中的静态 <i data-icon>
+    EP.wiki.init();            // V1.1:记忆库 Wiki 化迁移(幂等:无 ep_wiki 且档案非空时播种种子页面)
+    refreshMemBadge();         // V1.2 F5
     $('brand-home').onclick = function () { setView('home'); };
     var bgEl = document.getElementById('aurora-bg');     // Aurora 动态背景(ReactBits 组件,内嵌)
     if (bgEl && EP.aurora) {
@@ -472,7 +492,7 @@ EP.app = (function () {
     ['f-company', 'f-name', 'f-purpose', 'f-venue', 'f-notes', 'f-product'].forEach(function (id) {
       const el = $(id); if (el) el.oninput = saveDraftDebounced;
     });
-    ['f-date', 'f-start', 'f-duration', 'f-headcount', 'f-venueType', 'f-audience', 'f-budget', 'f-festival'].forEach(function (id) {
+    ['f-date', 'f-start', 'f-duration', 'f-headcount', 'f-venueType', 'f-audience', 'f-budget', 'f-festival', 'f-nomemory'].forEach(function (id) {
       const el = $(id); if (el) el.onchange = saveDraftDebounced;
     });
     $('btn-w-next').onclick = async function () {
@@ -527,12 +547,25 @@ EP.app = (function () {
         } }
       ]);
     };
+    /* V1.2 F6:导出 = 认可。kept = AI 写完后从未被人工改动的章节数;注入过的确认页 verified+1 */
+    const noteExport = function () {
+      const p = state.plan;
+      if (!p) return;
+      const secs = p.sections || [];
+      EP.profile.record({ t: 'plan_exported', data: {
+        planId: p.id, total: secs.length,
+        kept: secs.filter(function (x) { return x.flags && x.flags.ai; }).length,
+        edited: secs.filter(function (x) { return !x.flags || !x.flags.ai; }).length
+      } });
+      if (EP.wiki && p.memUsed && p.memUsed.keys) EP.wiki.verifyExport(p.memUsed.keys);
+    };
     $('btn-word').onclick = function () {
       if (!state.plan) return;
+      noteExport();
       try { EP.word.export(state.plan); toast('Word 文档(.docx)已导出'); }
       catch (e) { toast('Word 导出失败:' + ((e && e.message) || e), 'err'); }
     };
-    $('btn-export').onclick = function () { if (state.plan) { EP.exporter.download(state.plan); toast('已导出 Markdown 文件'); } };
+    $('btn-export').onclick = function () { if (state.plan) { noteExport(); EP.exporter.download(state.plan); toast('已导出 Markdown 文件'); } };
     $('btn-pdf').onclick = async function () {
       if (!state.plan) return;
       toast('正在生成 PDF…');
@@ -569,6 +602,6 @@ EP.app = (function () {
     $('modal').addEventListener('click', function (e) { if (e.target === this && this.dataset.sticky !== '1') closeModal(); });
     document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && $('modal').dataset.sticky !== '1') closeModal(); });
   }
-  return { init: init, toast: toast, confirmModal: confirmModal, promptModal: promptModal };
+  return { init: init, toast: toast, modal: modal, confirmModal: confirmModal, promptModal: promptModal, refreshMemBadge: refreshMemBadge };
 })();
 document.addEventListener('DOMContentLoaded', EP.app.init);

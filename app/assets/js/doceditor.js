@@ -319,7 +319,12 @@ EP.doceditor = (function () {
     box.querySelectorAll('[data-pref]').forEach(function (b) {
       b.onclick = function () {
         const m = state.chat.msgs[Number(b.dataset.pref)];
-        EP.profile.record({ t: 'preference_confirmed', data: { value: m.text } });
+        /* V1.2 F8:确认语境 = 该偏好卡之前最近一条用户指令(那就是用户说这话的原文) */
+        let why = '';
+        for (let i = state.chat.msgs.indexOf(m); i >= 0; i--) {
+          if (state.chat.msgs[i].kind === 'user') { why = state.chat.msgs[i].text.slice(0, 120); break; }
+        }
+        EP.profile.record({ t: 'preference_confirmed', data: { value: m.text, why: why } });
         m.done = true;
         renderChat();
         toast('已设为默认偏好,之后的生成将严格遵守');
@@ -397,6 +402,37 @@ EP.doceditor = (function () {
 
     const aiReady = function () { return EP.ai.ready(); };
     const AI_HINT = '需先在主界面「设置」配置 AI 接口';
+    /* V1.2 F1:选区操作统一经对话框——意图原话是最珍贵的记忆素材,也把 AI 的「猜」变成「听」 */
+    const SEL_OPS = {
+      polish: 'AI 润色', expand: 'AI 扩写', rewrite: 'AI 重写',
+      simplify: '本地精简', custom: 'AI 按要求修改'
+    };
+    function openSelDialog(op, range, text) {
+      const old = document.querySelector('.sel-dialog');
+      if (old) old.remove();                          /* 防堆叠:一次只允许一个选区对话框 */
+      const wrap = document.createElement('div');
+      wrap.className = 'sel-dialog';
+      wrap.innerHTML =
+        '<p class="sel-excerpt">“' + EP.md.esc(text.slice(0, 120)) + (text.length > 120 ? '…' : '') + '”</p>' +
+        '<textarea class="sel-input" rows="2" placeholder="' +
+        (op === 'custom' ? '告诉 AI 你想怎么改这段文字…' : '想怎么改?可留空,直接执行' + SEL_OPS[op]) + '"></textarea>' +
+        '<div class="sel-actions"><button class="btn btn-ghost btn-sm" data-x>取消</button>' +
+        '<button class="btn btn-primary btn-sm" data-go>开始' + (op === 'simplify' ? '精简' : '修改') + '</button></div>';
+      document.body.appendChild(wrap);
+      const ta = wrap.querySelector('.sel-input');
+      const onKey = function (e) { if (e.key === 'Escape') close(); };
+      function close() { wrap.remove(); document.removeEventListener('keydown', onKey); }
+      document.addEventListener('keydown', onKey);
+      wrap.querySelector('[data-x]').onclick = close;
+      wrap.querySelector('[data-go]').onclick = function () {
+        const instruction = ta.value.trim();
+        /* custom 必须有意图:框不关、就地提示,免得用户还要重新选区 */
+        if (op === 'custom' && !instruction) { toast('请先告诉 AI 你想怎么改', 'warn'); ta.focus(); return; }
+        close();
+        runSelOp(op, range, text, instruction);
+      };
+      setTimeout(function () { ta.focus(); }, 60);
+    }
 
     $('edit-doc').addEventListener('contextmenu', function (e) {
       const secTitle = e.target.closest('.edoc-sec-title');
@@ -414,16 +450,17 @@ EP.doceditor = (function () {
         return;
       }
       if (!body) return;
-      /* 2) 文字选区:AI 专改选中文字 */
+      /* 2) 文字选区:AI 专改选中文字(V1.2 F1:全部经对话框,意图可入记忆) */
       if (selText && sel.rangeCount && body.contains(sel.getRangeAt(0).commonAncestorContainer)) {
         e.preventDefault();
         const range = sel.getRangeAt(0).cloneRange();
         const text = selText;
         show(e.clientX, e.clientY, [
-          { label: '✦ AI 润色选中文字', disabled: !aiReady(), title: AI_HINT, fn: function () { runSelOp('polish', range, text); } },
-          { label: '✦ AI 扩写选中文字', disabled: !aiReady(), title: AI_HINT, fn: function () { runSelOp('expand', range, text); } },
-          { label: '✦ AI 重写选中文字', disabled: !aiReady(), title: AI_HINT, fn: function () { runSelOp('rewrite', range, text); } },
-          { label: '⤓ 精简选中文字', fn: function () { runSelOp('simplify', range, text); } },
+          { label: '✦ AI 润色选中文字', disabled: !aiReady(), title: AI_HINT, fn: function () { openSelDialog('polish', range, text); } },
+          { label: '✦ AI 扩写选中文字', disabled: !aiReady(), title: AI_HINT, fn: function () { openSelDialog('expand', range, text); } },
+          { label: '✦ AI 重写选中文字', disabled: !aiReady(), title: AI_HINT, fn: function () { openSelDialog('rewrite', range, text); } },
+          { label: '✦ AI 按你的要求修改…', disabled: !aiReady(), title: AI_HINT, fn: function () { openSelDialog('custom', range, text); } },
+          { label: '⤓ 精简选中文字', fn: function () { openSelDialog('simplify', range, text); } },
           '-',
           { label: '⧉ 复制选中文字', fn: function () { try { navigator.clipboard.writeText(text); toast('已复制'); } catch (err) { toast('复制失败', 'err'); } } }
         ]);
@@ -431,21 +468,22 @@ EP.doceditor = (function () {
       /* 其余区域:原生菜单(浏览、拼写等) */
     });
   }
-  async function runSelOp(op, range, text) {
+  async function runSelOp(op, range, text, instruction) {
     try {
       if (op === 'simplify') {
         if (text.length <= 40) { toast('选区已经很短,无需精简'); return; }
         const i = text.indexOf('。');
         const cut = (i > 10 ? text.slice(0, i + 1) : text.slice(0, 40)) + '……';
         replaceRange(range, cut);
-        EP.profile.record({ t: 'selection_op', data: { op: 'simplify', before: text, after: cut } });   // E4:嫌长信号
+        EP.profile.record({ t: 'selection_op', data: { op: 'simplify', instruction: instruction || '', before: text, after: cut } });   // E4:嫌长信号
         toast('已本地精简选中文字');
         return;
       }
       toast('AI 正在处理选中文字…');
-      const out = await EP.ai.textOp(op, text);
+      const out = await EP.ai.textOp(op, text, instruction);
       replaceRange(range, out);
-      EP.profile.record({ t: 'selection_op', data: { op: op, before: text, after: out } });             // E4:选区改写样本对
+      /* V1.2 F1:意图原话随样本对入记忆(强意图词在 profile 侧加权) */
+      EP.profile.record({ t: 'selection_op', data: { op: op, instruction: instruction || '', before: text, after: out } });
       toast('已应用 AI 修改(可用工具栏 ↩ 撤销)');
     } catch (e) {
       toast((e && e.message) ? e.message : '操作失败,已保留原文', 'err');
@@ -501,14 +539,26 @@ EP.doceditor = (function () {
       };
     });
     setupContextMenus();                                // 右键菜单:章节 AI / 选区 AI
-    $('btn-edit-pdf').onclick = async function () {
+    /* V1.2 F6:编辑页导出 = 认可(先 saveNow 落盘再统计,kept 以最新 flags 为准) */
+    const noteExport = function () {
       saveNow();
+      const p = state.plan;
+      const secs = p.sections || [];
+      EP.profile.record({ t: 'plan_exported', data: {
+        planId: p.id, total: secs.length,
+        kept: secs.filter(function (x) { return x.flags && x.flags.ai; }).length,
+        edited: secs.filter(function (x) { return !x.flags || !x.flags.ai; }).length
+      } });
+      if (EP.wiki && p.memUsed && p.memUsed.keys) EP.wiki.verifyExport(p.memUsed.keys);
+    };
+    $('btn-edit-pdf').onclick = async function () {
+      noteExport();
       toast('正在生成 PDF…');
       try { await EP.pdf.export(state.plan, document.getElementById('edit-doc')); toast('PDF 已导出'); }
       catch (e) { toast('PDF 生成失败:' + (e && e.message || e), 'err'); }
     };
     $('btn-edit-word').onclick = function () {
-      saveNow();
+      noteExport();
       try { EP.word.export(state.plan); toast('Word 文档(.docx)已导出'); }
       catch (e) { toast('Word 导出失败:' + ((e && e.message) || e), 'err'); }
     };

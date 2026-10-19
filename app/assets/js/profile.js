@@ -4,7 +4,9 @@
    设计依据 docs/12:确定性规则不用 LLM 提取(事件源已半结构化);
    ≥2 次才进摘要(NOOP 默认,防偶发污染);条目级时间戳 + 0.5^(天/180) 衰减;
    摘要限长 200 字、只陈述观察不下结论;事件环形缓冲只存统计量不存全文(全文在方案自身 prev 中)。
-   防漂移铁律:档案仅作风格与背景参考注入,不改变「未给信息写待定、不编造」契约。 */
+   防漂移铁律:档案仅作风格与背景参考注入,不改变「未给信息写待定、不编造」契约。
+   V1.1(docs/16,llm_wiki 范式):record 同步追加 rawLog —— 带全量 payload(字段截断)的
+   原始事件层(Raw Sources),供 EP.wiki 增量编译与 sources 溯源;seq 单调递增作编译水位线。 */
 window.EP = window.EP || {};
 EP.profile = (function () {
   const K = 'ep_profile';
@@ -12,6 +14,8 @@ EP.profile = (function () {
   const MAX_ENTRY = 3;
   const MIN_COUNT = 2;
   const HALF_LIFE_DAYS = 180;
+  const MAX_RAW = 200;             // rawLog 环形缓冲上限(有界增长,防 localStorage 溢出)
+  const RAW_STR = 400;             // payload 字符串字段截断长度
 
   /* AI 输出中常见、用户删掉即为明确负信号的公文套话 */
   const PHRASES = ['综上所述', '值得一提的是', '众所周知', '不难看出', '由此可见', '不言而喻', '总而言之'];
@@ -75,7 +79,9 @@ EP.profile = (function () {
       defaults: { duration: [], venueType: [], audience: [] },
       notesSeen: {},          // 特殊需求/对话子句计数(重复→确认建议,docs/14 T1)
       lastFormSig: '',
-      events: []
+      events: [],
+      seq: 0,                 // V1.1:rawLog 事件序号(单调递增,EP.wiki 编译水位线)
+      rawLog: []              // V1.1:原始事件层(带截断 payload,环形缓冲 MAX_RAW)
     };
   }
   /* 载入即归并:兼容字段缺失的旧档案(v1→v2 迁移:补 departments 与 preferences[].cat) */
@@ -99,8 +105,21 @@ EP.profile = (function () {
     e.notesSeen = p.notesSeen || {};
     e.lastFormSig = p.lastFormSig || '';
     e.events = p.events || [];
+    e.seq = p.seq || 0;
+    e.rawLog = p.rawLog || [];
     e.ver = 2;
     return e;
+  }
+  /* rawLog payload 深截断:字符串 400 字、数组 12 项、对象 16 键(有界存储,溯源足够) */
+  function trunc(v) {
+    if (typeof v === 'string') return v.length > RAW_STR ? v.slice(0, RAW_STR) + '…' : v;
+    if (Array.isArray(v)) return v.slice(0, 12).map(trunc);
+    if (v && typeof v === 'object') {
+      const o = {};
+      Object.keys(v).slice(0, 16).forEach(function (k) { o[k] = trunc(v[k]); });
+      return o;
+    }
+    return v;
   }
   /* 特殊需求子句规范化:去空白与标点后计数,容忍微小措辞差异 */
   function normClause(s) {
@@ -170,8 +189,10 @@ EP.profile = (function () {
       const intent = /以后|默认|记住|总是|每次都/.test(String(d.text || ''));
       trackClauses(p, d.text, intent ? 3 : 1);
     } else if (ev.t === 'preference_confirmed') {
-      /* 用户显式确认:升级为最高优先级(严格遵守),该子句不再建议 */
+      /* 用户显式确认:升级为最高优先级(严格遵守),该子句不再建议;why=确认时的原话/理由(V1.2 F8) */
       bumpPref(p.facts.preferences, String(d.value || '').trim(), 'rule', 'confirmed', now);
+      const hit = p.facts.preferences.find(function (e) { return e.value === String(d.value || '').trim(); });
+      if (hit && d.why) hit.why = String(d.why).slice(0, 120);
       const key = normClause(d.value);
       if (p.notesSeen[key]) p.notesSeen[key].state = 'confirmed';
     } else if (ev.t === 'preference_rejected') {
@@ -200,6 +221,8 @@ EP.profile = (function () {
       }
     } else if (ev.t === 'selection_op') {
       if (d.op === 'simplify') p.style.selSimplify++;
+      /* V1.2 F1:选区修改的意图原话并入偏好检测(意图常含「以后/都要」类长期表述,强意图加权) */
+      trackClauses(p, d.instruction, /以后|默认|记住|总是|每次都/.test(String(d.instruction || '')) ? 3 : 1);
     } else if (ev.t === 'form_defaults') {
       const f = d.form || {};
       const sig = [f.duration, f.venueType, f.audience, budgetTier(f.budgetTotal)].join('|');
@@ -216,6 +239,11 @@ EP.profile = (function () {
     if (ev.t === 'section_ai_op' || ev.t === 'selection_op') skel.op = d.op;
     p.events.push(skel);
     if (p.events.length > MAX_EVENTS) p.events.splice(0, p.events.length - MAX_EVENTS);
+    /* V1.1 rawLog:全量 payload 落原始层(docs/16),seq 即编译水位线;
+       form_defaults 同签名在上方早退,与此处骨架口径一致(去重事件不重复占用缓冲) */
+    p.seq = (p.seq || 0) + 1;
+    p.rawLog.push({ seq: p.seq, at: now, t: ev.t, d: trunc(d) });
+    if (p.rawLog.length > MAX_RAW) p.rawLog.splice(0, p.rawLog.length - MAX_RAW);
     return p;
   }
 

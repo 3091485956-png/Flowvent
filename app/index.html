@@ -36,10 +36,10 @@
       <nav class="drawer-nav">
         <button data-panel="activities"><i data-icon="folder-open"></i>我的活动</button>
         <button data-panel="create"><i data-icon="plus"></i>创建活动</button>
-        <button data-panel="memory"><i data-icon="sparkles"></i>记忆库</button>
+        <button data-panel="memory"><i data-icon="sparkles"></i>记忆库<span class="nav-badge" id="mem-badge" hidden></span></button>
         <button data-panel="settings"><i data-icon="settings"></i>设置</button>
       </nav>
-      <p class="drawer-foot">数据只存本机</p>
+      <p class="drawer-foot">数据只存本机 · V1.1</p>
     </aside>
 
     <div class="app-main">
@@ -143,6 +143,8 @@
 
         <div class="wizard-footer">
           <span class="wizard-hint">方案由 AI 一次性生成整份文档;未填写的可选项将以「待定」呈现,不会编造。</span>
+          <label class="mem-skip" title="勾选后本次生成不携带任何记忆偏好,得到一份「无记忆」的干净初稿;使用事件仍会照常记录">
+            <input type="checkbox" id="f-nomemory">本次不参考我的记忆</label>
           <label class="effort-pick" title="思考强度由所配置的模型决定,不支持时自动忽略">思考强度
             <select class="input select" id="f-effort">
               <option value="high" selected>深度</option>
@@ -167,34 +169,66 @@
         </div>
       </div><!-- /panel-create -->
 
-      <!-- 面板:记忆库(docs/13/15) -->
+      <!-- 面板:记忆库(docs/13/15/16;V1.1.1 分类下沉图谱 + 洞察子页) -->
       <div class="panel" id="panel-memory">
-        <h2 class="page-title">记忆库 <span class="section-count">四大模块 · 记忆图谱</span></h2>
-        <div class="cat-chips" id="mem-cats"></div>
-        <div class="history-toolbar">
-          <select class="input select" id="mem-store"></select>
-          <button class="btn btn-ghost btn-sm" id="mem-new"><i data-icon="plus"></i>新建笔记库</button>
-          <button class="btn btn-ghost btn-sm" id="mem-import"><i data-icon="download"></i>导入 MD</button>
-          <button class="btn btn-ghost btn-sm" id="mem-import-dir"><i data-icon="folder-open"></i>文件夹</button>
-          <button class="btn btn-ghost btn-sm" id="mem-intake"><i data-icon="wand-sparkles"></i>导入过往方案</button>
-          <button class="btn btn-ghost btn-sm" id="mem-induce">归纳偏好</button>
-          <button class="btn btn-ghost btn-sm" id="mem-layout">布局:力导向</button>
-          <button class="btn btn-ghost btn-sm" id="mem-export">导出</button>
-          <button class="btn btn-danger-ghost btn-sm" id="mem-del-store">删库</button>
-          <input type="search" class="input" id="mem-search" placeholder="搜索节点…">
+        <h2 class="page-title">记忆库 <span class="section-count">记忆图谱 · 洞察</span></h2>
+        <div class="mem-toolbar">
+          <div class="mem-seg" id="mem-seg">
+            <button id="mem-seg-graph" class="on">图谱</button>
+            <button id="mem-seg-insight">洞察<span class="seg-badge" id="mem-seg-badge" hidden></span></button>
+          </div>
+          <button class="btn btn-primary btn-sm" id="mem-compile"><i data-icon="wand-sparkles"></i>编译记忆</button>
+          <button class="btn btn-ghost btn-sm" id="mem-butler" title="用一句话让 AI 帮你管记忆:改内容、删过时、合并重复">🧚 精灵</button>
+          <span class="ai-status mem-status" id="mem-profile-status"></span>
+          <span class="mem-toolbar-side">
+            <input type="search" class="input mem-search" id="mem-search" placeholder="搜索节点…">
+            <button class="btn btn-ghost btn-sm" id="mem-layout" title="切换布局(当前:力导向)">⊞</button>
+          </span>
         </div>
-        <div class="memory-toolbar-side">
-          <span class="ai-status" id="mem-profile-status"></span>
-          <button class="btn btn-ghost btn-sm" id="mem-profile-clear">清除档案</button>
-        </div>
-        <div class="memory-body">
+        <div class="memory-body" id="mem-view-graph">
           <div id="mem-cy"></div>
+          <div class="mem-legend" id="mem-legend">
+            <span><i class="lg lg-company"></i>公司</span><span><i class="lg lg-department"></i>各部门</span><span><i class="lg lg-style"></i>风格</span><span><i class="lg lg-misc"></i>其他</span><span><i class="lg lg-confirmed"></i>已确认</span>
+            <em>滚轮滚动页面 · Ctrl+滚轮缩放</em>
+          </div>
+          <div class="mem-fabs">
+            <button class="btn btn-primary btn-sm" id="mem-fab-import">＋ 导入</button>
+            <button class="btn btn-ghost btn-sm" id="mem-fab-more" title="笔记库与档案管理">⋯</button>
+          </div>
+          <div class="mem-popover" id="mem-pop-import" hidden>
+            <button data-mimport="file">导入笔记文件(MD / TXT)</button>
+            <button data-mimport="dir">导入笔记文件夹</button>
+            <button data-mimport="intake">导入过往方案(.docx / PDF)</button>
+            <button data-mimport="induce">归纳偏好(从编辑行为学习)</button>
+          </div>
+          <div class="mem-popover" id="mem-pop-more" hidden>
+            <label class="mem-pop-row">笔记库<select class="input select" id="mem-store"></select></label>
+            <button id="mem-new">新建笔记库</button>
+            <button id="mem-export">导出笔记库 JSON</button>
+            <button id="mem-export-wiki">导出记忆页面 Markdown</button>
+            <button class="danger" id="mem-del-store">删除笔记库</button>
+            <div class="mem-pop-sep"></div>
+            <button class="danger" id="mem-profile-clear">清除记忆档案</button>
+          </div>
+          <div class="butler-panel" id="butler-panel" hidden>
+            <div class="butler-head"><b>记忆精灵</b><span class="chat-target">说一句话,帮你管记忆;改动都会先给你确认</span><button class="chat-close" id="butler-close" title="收起">✕</button></div>
+            <div class="butler-msgs" id="butler-msgs"></div>
+            <div class="chat-quick">
+              <button data-bq="合并内容重复的记忆页面">合并重复</button>
+              <button data-bq="检查并清理过时的记忆页面">清理过时</button>
+              <button data-bq="逐条处理待确认的矛盾">处理矛盾</button>
+            </div>
+            <div class="chat-input-row">
+              <textarea id="butler-input" rows="2" placeholder="如:把「致辞10分钟」改成 15 分钟 / 我们换场地了,删掉旧场地"></textarea>
+              <button class="btn btn-primary btn-sm" id="butler-send">发送</button>
+            </div>
+          </div>
           <input type="file" id="mem-file-input" multiple accept=".md,.markdown,.txt" hidden>
           <input type="file" id="mem-dir-input" webkitdirectory hidden>
           <input type="file" id="mem-intake-input" multiple accept=".docx,.pdf,.md,.txt" hidden>
           <div class="mem-detail" id="mem-detail" hidden></div>
         </div>
-        <p class="modal-note">· 导入仅在本机解析所选文件,零上传;再次导入同一文件夹时,未变更文件自动跳过<br>· 浏览器安全限制:节点不能直接打开本地文件,可在详情中复制路径<br>· 绿色节点是 AI 正在使用的企业偏好,点击可删除;图谱渲染库首次打开时联网加载,离线时自动切换列表视图</p>
+        <div class="mem-insight" id="mem-view-insight" hidden></div>
       </div>
 
       <!-- 面板:设置 -->
@@ -318,6 +352,7 @@
 <script src="assets/js/md.js"></script>
 <script src="assets/js/struct.js"></script>
 <script src="assets/js/profile.js"></script>
+<script src="assets/js/wiki.js"></script>
 <script src="assets/js/ai.js"></script>
 <script src="assets/js/storage.js"></script>
 <script src="assets/js/memory.js"></script>

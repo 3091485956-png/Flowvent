@@ -76,15 +76,19 @@ EP.ai = (function () {
     '7.全文中文,正式商务文书风格,内容专业、可落地执行;\n' +
     '8.直接输出文档正文,不要任何解释、开场白或代码块包裹。';
 
-  /* ── 档案注入(「越用越懂用户」):仅供参考的追加段,无档案时 prompt 与既往逐字节一致 ── */
-  function memBlock(kind) {
-    try { return (EP.profile && EP.profile.summarize(EP.profile.load(), kind)) || ''; }
-    catch (e) { return ''; }
+  /* ── 档案注入(「越用越懂用户」):仅供参考的追加段,无档案时 prompt 与既往逐字节一致。
+        V1.1(docs/16):优先取 EP.wiki 编译页面;wiki 无页面/异常时回退统计档案(零回归);
+        form 供相关性排序(与本次活动更相关的记忆页面优先注入) ── */
+  function memBlock(kind, form) {
+    try {
+      if (EP.wiki) return EP.wiki.assemble(kind, { form: form }) || '';
+      return (EP.profile && EP.profile.summarize(EP.profile.load(), kind)) || '';
+    } catch (e) { return ''; }
   }
 
-  function buildPlanMessages(form) {
+  function buildPlanMessages(form, noMemory) {
     const user = '活动信息如下:\n' + formBrief(form);
-    const mem = memBlock('plan');
+    const mem = noMemory ? '' : memBlock('plan', form);   // V1.2 F4:勾选「本次不参考记忆」时与无档案用户逐字节一致
     return [
       { role: 'system', content: SYS_PLAN },
       { role: 'user', content: mem ? user + '\n\n记忆库(该用户的历史使用观察,仅供参考;与上述活动信息冲突时,一律以活动信息为准):\n' + mem : user }
@@ -120,7 +124,7 @@ EP.ai = (function () {
     const c = cfg();
     if (!c.baseURL || !c.apiKey || !c.model) throw new Error('尚未配置 AI 接口:请到「设置」填写接口地址、密钥与模型名');
     const o = opts || {};
-    const base = { model: c.model, messages: buildPlanMessages(form), temperature: 0.5, stream: true };
+    const base = { model: c.model, messages: buildPlanMessages(form, !!o.noMemory), temperature: 0.5, stream: true };
     const callWith = async function (extra) {
       const ctrl = new AbortController();
       /* 连接阶段超时:响应头迟迟不达时 fetch 可挂起约 5 分钟(闸门锁死且无取消),60 秒即断 */
@@ -197,7 +201,7 @@ EP.ai = (function () {
       '」章节。要求:1.风格与信息口径与原文档一致,只依据给定的活动信息,不编造事实;2.直接输出该章节的正文(Markdown,可用「#### 」小节、列表、表格、引用),不要以「## 」标题开头,不要解释;';
     const user = '活动信息:\n' + formBrief(form) + '\n\n文档章节目录:\n' + outline +
       '\n\n「' + title + '」章节现内容(供参考,重写时可调整组织方式):\n' + (md || '(空)');
-    const mem = memBlock('section');   // regen 可调整组织方式,保留结构向偏好;polish/expand 用 polish 变体
+    const mem = memBlock('section', form);   // regen 可调整组织方式,保留结构向偏好;polish/expand 用 polish 变体
     return [
       { role: 'system', content: sys },
       { role: 'user', content: mem ? '用户偏好摘要(仅供参考):\n' + mem + '\n\n' + user : user }
@@ -221,21 +225,39 @@ EP.ai = (function () {
   const SYS_TEXT = {
     polish: '你是企业文书润色专家。请润色下面这段文字:保持原意与长度基本不变,只优化文风、用词与通顺度,使其更专业。直接输出润色后的文字,不要任何解释、引号或换行修饰。',
     expand: '你是企业活动策划专家。请在保持原意的前提下,为下面这段文字补充一到两句可执行的细节。直接输出扩写后的完整文字,不要解释或引号。',
-    rewrite: '你是企业文书专家。请换一种更专业、更有表现力的写法重写下面这段文字,保持原意与长度相当。直接输出重写后的文字,不要解释或引号。'
+    rewrite: '你是企业文书专家。请换一种更专业、更有表现力的写法重写下面这段文字,保持原意与长度相当。直接输出重写后的文字,不要解释或引号。',
+    /* V1.2 F1:自定义指令(op='custom' 时 instruction 必填,是唯一任务来源) */
+    custom: '你是企业文书编辑专家。请按用户给出的要求修改下面的文字:只做要求范围内的修改,保持其余内容与原意不变;要求未提及的信息不得编造。直接输出修改后的完整文字,不要解释或引号。'
   };
 
-  /* ── 过往方案解析(docs/14/15):文本 → 结构化并分类的偏好(严格 JSON 契约) ── */
-  const SYS_PARSE = '你是企业活动策划分析师。分析下面这份过往活动策划方案,提取其中明确体现的组织事实与策划偏好,并归入四个记忆模块之一。只输出 JSON 对象(不要解释、不要代码块包裹):{"facts":[{"kind":"company|venue|audience|department","value":"组织名/场地名/人群/部门信息(如:行政部:活动负责人王五)"}],"preferences":[{"kind":"rule|style","cat":"company|department|style|misc","value":"偏好内容"}]}。cat 为记忆模块:company=公司级事实(组织/场地/人群/预算习惯),department=与某部门相关的信息,style=策划案排版与文风特征,misc=其他用户偏好。要求:1.只提取文中明确体现的,不得推测;2.facts 至多 4 条,preferences 至多 8 条;3.value 为简短中文短语。';
-  async function parsePastPlan(text) {
-    const raw = await chat([{ role: 'system', content: SYS_PARSE },
-      { role: 'user', content: String(text || '').slice(0, 8000) }], { temp: 0.2, timeout: 120000 });
+  /* 选区文字操作的 prompt 构建(纯函数,node 可测;V1.2 F1:支持用户意图 instruction) */
+  function buildTextMessages(op, text, instruction) {
+    const sys = SYS_TEXT[op] || SYS_TEXT.custom;
+    const req = String(instruction || '').trim().slice(0, 200);
+    const user = req ? String(text) + '\n\n用户对这段文字的要求:' + req : String(text);
+    return [{ role: 'system', content: sys }, { role: 'user', content: user }];
+  }
+
+  /* ── 导入文件解析(docs/14/15 + V1.2 F9 分类型):策划案 / 公司制度·部门资料 两套契约 ── */
+  const SYS_PARSE = {
+    plan: '你是企业活动策划分析师。分析下面这份过往活动策划方案,提取其中明确体现的组织事实与策划偏好,并归入四个记忆模块之一。只输出 JSON 对象(不要解释、不要代码块包裹):{"facts":[{"kind":"company|venue|audience|department","value":"组织名/场地名/人群/部门信息(如:行政部:活动负责人王五)"}],"preferences":[{"kind":"rule|style","cat":"company|department|style|misc","value":"偏好内容"}]}。cat 为记忆模块:company=公司级事实(组织/场地/人群/预算习惯),department=与某部门相关的信息,style=策划案排版与文风特征,misc=其他用户偏好。要求:1.只提取文中明确体现的,不得推测;2.facts 至多 4 条,preferences 至多 8 条;3.value 为简短中文短语。',
+    org: '你是企业管理制度分析员。分析下面这份公司制度/部门资料/品牌规范类文件,提取组织事实与长期有效的规范口径,供活动策划参考。只输出 JSON 对象(不要解释、不要代码块包裹):{"facts":[{"kind":"company|venue|audience|department","value":"组织名/部门职责/场地/人群信息(如:行政部:负责全司活动统筹)"}],"preferences":[{"kind":"rule|style","cat":"company|department|style|misc","value":"品牌口径/流程规则/注意事项(如:对外文案必须用公司全称)"}]}。cat 为记忆模块:company=公司级事实,department=部门信息,style=文书风格规范,misc=其他规则。要求:1.只提取文中明确写明的,不得推测;2.facts 至多 6 条,preferences 至多 10 条;3.value 为简短中文短语;4.临时性、带明确期限的内容不提取。'
+  };
+  function buildParseMessages(text, kind) {
+    const sys = kind === 'org' ? SYS_PARSE.org : SYS_PARSE.plan;
+    return [{ role: 'system', content: sys },
+      { role: 'user', content: String(text || '').slice(0, 8000) }];
+  }
+  async function parsePastPlan(text, kind) {
+    const raw = await chat(buildParseMessages(text, kind), { temp: 0.2, timeout: 120000 });
     const m = raw.match(/\{[\s\S]*\}/);
     if (!m) throw new Error('AI 返回的内容无法解析为结构化偏好,请重试');
     let j;
     try { j = JSON.parse(m[0]); } catch (e) { throw new Error('AI 返回的 JSON 格式异常,请重试'); }
+    const cap = kind === 'org' ? [6, 10] : [4, 8];
     return {
-      facts: (j.facts || []).filter(function (x) { return x && x.value; }).slice(0, 4),
-      preferences: (j.preferences || []).filter(function (x) { return x && x.value; }).slice(0, 8)
+      facts: (j.facts || []).filter(function (x) { return x && x.value; }).slice(0, cap[0]),
+      preferences: (j.preferences || []).filter(function (x) { return x && x.value; }).slice(0, cap[1])
     };
   }
 
@@ -250,6 +272,96 @@ EP.ai = (function () {
     if (!m) throw new Error('归纳结果无法解析,请重试');
     const j = JSON.parse(m[0]);
     return (j.preferences || []).filter(function (x) { return x && x.value; }).slice(0, 5);
+  }
+
+  /* ── 记忆库 Wiki 编译(docs/16,llm_wiki Two-Step CoT 思想):
+        第一步分析(实体/偏好/与现有页面的矛盾),第二步依据分析产出页面补丁。
+        JSON 契约容错解析与 parseEditReply 同风格;页面补丁的最终校验在 wiki.applyPatch ── */
+  const SYS_WIKI_ANALYZE = '你是用户记忆库的编译分析器。输入为用户使用事件批次与记忆库现有页面,第一步只做分析、不产出页面。只输出 JSON 对象(不要解释、不要代码块包裹):{"notes":["从事件中可提取的组织事实或偏好观察,每条一句"],"contradictions":[{"title":"冲突的现有页面标题","issue":"与新事件的矛盾点"}],"plan":"一句话页面更新计划"}。要求:1.只依据事件中明确出现的信息,不得推测;2.矛盾指现有页面与新事件对同一事实表述不一致;3.notes 至多 10 条;4.注意区分「单次活动信息」与「长期习惯」——具体日期、地点、人数、预算金额属于单次方案,不构成记忆,notes 中不得提取。';
+  const SYS_WIKI_WRITE = '你是用户记忆库的写入器。依据分析与事件批次产出记忆页面补丁。只输出 JSON 对象(不要解释、不要代码块包裹):{"pages":[{"action":"upsert 或 delete","title":"页面标题(20 字内;实体用名称本身,偏好用要求原文)","kind":"entity 或 preference","cat":"company|department|style|misc","sub":"entity 细分:company|venue|budget|audience|duration|department,偏好留空","desc":"一句话检索描述,20 字内,用于判断与活动的相关性","body":"一句观察,只陈述观察不下结论,如:在 3 次活动中担任组织方","links":["其他页面标题,仅可引用现有页面或本批新增页面"],"level":"inductive(默认)或 confirmed(仅当事件中存在 preference_confirmed 支撑时)","confidence":0到1的小数}],"reviews":[{"title":"涉及页面标题","issue":"矛盾或需用户判断的事项","suggestion":"建议动作"}]}。铁律:1.不得编造事件中没有的事实(人名、金额、品牌、地点);2.页面只记观察,不写结论或建议;3.links 不得引用不存在的页面;4.至多 upsert 8 页、delete 2 页、reviews 3 条;没有值得记录的内容时对应数组留空;5.confirmed 偏好页 body 尽量带「原因:」与「适用:」说明(事件中有用户原话时引用);6.不建「活动本身」的页面:具体日期、地点、人数、预算金额是单次方案信息而非用户习惯,即使出现多次也只在达到长期模式时才记(如「常于周末办活动」可记,「1 月 20 日办年会」不记);6.只出现一次的偶发行为不记;7.能从活动信息表单直接推导的不重复记。';
+
+  function wikiBatchDigest(batch) {
+    return (batch || []).map(function (e) {
+      let d = '';
+      try { d = JSON.stringify(e.d); } catch (err) { d = '(不可序列化)'; }
+      return '#' + e.seq + ' [' + e.t + '] ' + d;
+    }).join('\n');
+  }
+  function buildWikiAnalyzeMessages(batch, pages, tombstones) {
+    const pageLines = (pages || []).map(function (p) {
+      return '- ' + p.title + '(' + p.kind + '/' + p.cat + '/' + p.level + '):' + p.body;
+    }).join('\n') || '(空)';
+    return [{ role: 'system', content: SYS_WIKI_ANALYZE },
+      { role: 'user', content: '事件批次(按时间序):\n' + wikiBatchDigest(batch) +
+        '\n\n现有页面:\n' + pageLines +
+        ((tombstones || []).length ? '\n\n以下页面 key 已被用户删除,禁止重建同内容:' + tombstones.join(',') : '') }];
+  }
+  function buildWikiWriteMessages(analysis, batch, pages) {
+    return [{ role: 'system', content: SYS_WIKI_WRITE },
+      { role: 'user', content: '分析结果(JSON):\n' + JSON.stringify(analysis) +
+        '\n\n事件批次:\n' + wikiBatchDigest(batch) +
+        '\n\n现有页面标题(links 仅可引用这些或本批新增):\n' + ((pages || []).map(function (p) { return p.title; }).join('\n') || '(空)') }];
+  }
+  function extractJson(raw) {
+    const m = String(raw || '').match(/\{[\s\S]*\}/);
+    if (!m) throw new Error('AI 返回无法解析为 JSON,请重试');
+    try { return JSON.parse(m[0]); } catch (e) { throw new Error('AI 返回的 JSON 格式异常,请重试'); }
+  }
+  function parseWikiPatch(raw) {
+    const j = extractJson(raw);
+    return {
+      pages: (j.pages || []).filter(function (x) { return x && x.title; }).map(function (x) {
+        return {
+          action: x.action === 'delete' ? 'delete' : 'upsert',
+          title: String(x.title), kind: x.kind === 'entity' ? 'entity' : 'preference',
+          cat: x.cat, sub: x.sub || '', desc: String(x.desc || ''), body: String(x.body || ''),
+          links: Array.isArray(x.links) ? x.links.map(String) : [],
+          level: x.level === 'confirmed' ? 'confirmed' : 'inductive',
+          confidence: x.confidence
+        };
+      }),
+      reviews: (j.reviews || []).filter(function (x) { return x && (x.issue || x.title); })
+    };
+  }
+  async function compileWiki(batch, pages, tombstones) {
+    const aRaw = await chat(buildWikiAnalyzeMessages(batch, pages, tombstones), { temp: 0.2, timeout: 120000 });
+    const analysis = extractJson(aRaw);
+    const wRaw = await chat(buildWikiWriteMessages(analysis, batch, pages), { temp: 0.2, timeout: 120000 });
+    return { analysis: analysis, patch: parseWikiPatch(wRaw) };
+  }
+
+  /* ── 记忆库精灵(docs/18 F10,V1.2):自然语言管记忆;动作先卡后落,应用前不落库 ── */
+  const SYS_BUTLER = '你是记忆库管理精灵,帮用户用一句话维护自己的记忆库。输入为用户指令、记忆页面清单(标题/描述/类别/级别)、相关页面全文、待确认矛盾清单。只输出 JSON 对象(不要解释、不要代码块包裹):{"reply":"给用户的简短说明(40 字内)","actions":[{"type":"update|delete|merge|resolve","key":"目标页面 key(必须取自清单)","key2":"merge 时被并入的另一页 key","title":"update 改名时的新标题(可选)","body":"update 时的新正文全文(必填;只做用户要求范围内的修改,不得编造用户没有提供的信息)"}]}。resolve 用于处理待确认矛盾(此时 key 填矛盾 id)。规则:1.只能操作清单中存在的页面/矛盾;2.不得改变页面的确认/归纳级别(升级确认只能由用户显式操作);3.每次至多 6 个动作;4.没有需要的动作时 actions 留空并在 reply 说明;5.merge 时 key 保留、key2 被并入后删除。';
+  function buildButlerMessages(instruction, manifest, fulls, reviews) {
+    const NL = '\n';
+    const man = (manifest || []).map(function (m) {
+      return '- ' + m.key + ' | ' + m.title + '(' + m.cat + '/' + m.level + ')' + (m.desc ? ':' + m.desc : '');
+    }).join(NL) || '(空)';
+    const full = (fulls || []).map(function (f) {
+      return '【' + f.title + '】key=' + f.key + NL + NL + f.body;
+    }).join(NL + NL) || '(无)';
+    const rev = (reviews || []).map(function (r) {
+      return '- 矛盾id ' + r.id + ':「' + r.title + '」' + r.issue;
+    }).join(NL) || '(无)';
+    return [{ role: 'system', content: SYS_BUTLER },
+      { role: 'user', content: '用户指令:' + String(instruction || '').slice(0, 300) +
+        NL + NL + '记忆页面清单:' + NL + man +
+        NL + NL + '相关页面全文:' + NL + full +
+        NL + NL + '待确认矛盾:' + NL + rev }];
+  }
+  function parseButlerReply(raw) {
+    const j = extractJson(raw);
+    return {
+      reply: String(j.reply || ''),
+      actions: (j.actions || []).filter(function (x) { return x && x.key && x.type; }).slice(0, 6).map(function (x) {
+        return { type: x.type, key: String(x.key), key2: x.key2 ? String(x.key2) : '',
+                 title: x.title ? String(x.title).slice(0, 40) : '', body: x.body ? String(x.body) : '' };
+      })
+    };
+  }
+  async function butlerChat(instruction, manifest, fulls, reviews) {
+    const raw = await chat(buildButlerMessages(instruction, manifest, fulls, reviews), { temp: 0.2, timeout: 120000 });
+    return parseButlerReply(raw);
   }
 
   /* ── AI 对话编辑(docs/15 F2):对话式修改方案,JSON 契约(reply+edit+save_pref) ── */
@@ -291,6 +403,12 @@ EP.ai = (function () {
     buildChatMessages: buildChatMessages,
     parseEditReply: parseEditReply,
     chatEdit: chatEdit,
+    buildWikiAnalyzeMessages: buildWikiAnalyzeMessages,
+    buildWikiWriteMessages: buildWikiWriteMessages,
+    parseWikiPatch: parseWikiPatch,
+    buildButlerMessages: buildButlerMessages,
+    parseButlerReply: parseButlerReply, butlerChat: butlerChat,
+    compileWiki: compileWiki,
     ready: ready,
     config: cfg,
     formBrief: formBrief,
@@ -301,11 +419,13 @@ EP.ai = (function () {
     generatePlanStream: generatePlanStream,
     _sseParse: parseSSE,
     parsePastPlan: parsePastPlan,
+    buildParseMessages: buildParseMessages,
     inducePrefs: inducePrefs,
-    /* 选区级文字操作(右键菜单):polish / expand / rewrite,输入输出均为纯文本 */
-    async textOp(op, text) {
-      return chat([{ role: 'system', content: SYS_TEXT[op] },
-                   { role: 'user', content: text }], { temp: 0.4 });
+    /* 选区级文字操作(右键菜单 → V1.2 F1 对话框):polish/expand/rewrite/custom + instruction 意图 */
+    buildTextMessages: buildTextMessages,
+    async textOp(op, text, instruction) {
+      if (op === 'custom' && !String(instruction || '').trim()) throw new Error('请先填写你的修改要求');
+      return chat(buildTextMessages(op, text, instruction), { temp: 0.4 });
     },
     async polish(title, md) {
       const mem = memBlock('polish');
